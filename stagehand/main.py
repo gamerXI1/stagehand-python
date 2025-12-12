@@ -21,6 +21,7 @@ from .api import _create_session, _execute, _get_replay_metrics
 from .browser import (
     cleanup_browser_resources,
     connect_browserbase_browser,
+    connect_aws_agentcore_browser,
     connect_local_browser,
 )
 from .config import StagehandConfig, default_config
@@ -209,14 +210,21 @@ class Stagehand:
         self._local_user_data_dir_temp: Optional[Path] = (
             None  # To store path if created temporarily
         )
+        self._aws_browser_client = None  # To store AWS browser client for cleanup
 
         # Initialize metrics tracking
         self._local_metrics = StagehandMetrics()  # Internal storage for local metrics
         self._inference_start_time = 0  # To track inference time
 
+        # Extract AWS-specific values from config
+        self.aws_region = self.config.aws_region or os.getenv("AWS_REGION")
+        self.aws_profile = self.config.aws_profile or os.getenv("AWS_PROFILE")
+        self.aws_session_id = self.config.aws_session_id
+        self.aws_session_create_params = self.config.aws_session_create_params or {}
+
         # Validate env
-        if self.env not in ["BROWSERBASE", "LOCAL"]:
-            raise ValueError("env must be either 'BROWSERBASE' or 'LOCAL'")
+        if self.env not in ["BROWSERBASE", "LOCAL", "AWS"]:
+            raise ValueError("env must be either 'BROWSERBASE', 'LOCAL', or 'AWS'")
 
         # Initialize the centralized logger with the specified verbosity
         self.on_log = self.config.logger or default_log_handler
@@ -254,6 +262,13 @@ class Stagehand:
                         "browserbase_project_id is required for BROWSERBASE env with existing session_id (or set BROWSERBASE_PROJECT_ID in env)."
                     )
 
+        # If using AWS, validate region
+        if self.env == "AWS":
+            if not self.aws_region:
+                raise ValueError(
+                    "aws_region is required for AWS env (or set AWS_REGION in environment)."
+                )
+
         # Register signal handlers for graceful shutdown
         self._register_signal_handlers()
 
@@ -269,6 +284,8 @@ class Stagehand:
         self.experimental = self.config.experimental
         if self.env == "LOCAL":
             self.use_api = False
+        if self.env == "AWS":
+            self.use_api = False  # AWS uses local LLM client, not API mode
         if (
             self.browserbase_session_create_params
             and self.browserbase_session_create_params.get("region")
@@ -520,6 +537,30 @@ class Stagehand:
                 await self.close()
                 raise
 
+        elif self.env == "AWS":
+            # Connect to AWS AgentCore Browser
+            try:
+                (
+                    self._browser,
+                    self._context,
+                    self.context,
+                    self._page,
+                    self._aws_browser_client,
+                ) = await connect_aws_agentcore_browser(
+                    self._playwright,
+                    self.aws_region,
+                    self.aws_profile,
+                    self.aws_session_id,
+                    self.aws_session_create_params,
+                    self,
+                    self.logger,
+                )
+                self._playwright_page = self._page._page
+
+            except Exception:
+                await self.close()
+                raise
+
         elif self.env == "LOCAL":
             # Connect to local browser
             try:
@@ -587,10 +628,16 @@ class Stagehand:
         """
         Clean up resources.
         For BROWSERBASE: Ends the session on the server and stops Playwright.
+        For AWS: Stops the AWS browser session and closes Playwright.
         For LOCAL: Closes the local context, stops Playwright, and removes temporary directories.
+
+        This method is idempotent - calling it multiple times is safe.
         """
         if self._closed:
             return
+
+        # Set closed flag immediately to prevent re-entry
+        self._closed = True
 
         self.logger.debug("Closing resources...")
 
@@ -630,9 +677,8 @@ class Stagehand:
             self._playwright,
             self._local_user_data_dir_temp,
             self.logger,
+            self._aws_browser_client,
         )
-
-        self._closed = True
 
     async def _handle_log(self, msg: dict[str, Any]):
         """
@@ -741,6 +787,20 @@ class Stagehand:
             stagehand_page: The StagehandPage to set as active
         """
         self._page = stagehand_page
+
+    @property
+    def current_session_id(self) -> Optional[str]:
+        """
+        Get the session ID for the current environment.
+
+        Returns:
+            str: The session ID for BROWSERBASE or AWS, None for LOCAL environment
+        """
+        if self.env == "BROWSERBASE":
+            return self.session_id
+        elif self.env == "AWS":
+            return self.aws_session_id
+        return None
 
     @property
     def page(self) -> Optional[StagehandPage]:

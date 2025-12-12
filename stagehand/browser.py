@@ -3,7 +3,7 @@ import os
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Protocol, runtime_checkable
 
 from browserbase import Browserbase
 from browserbase.types import SessionCreateParams as BrowserbaseSessionCreateParams
@@ -16,6 +16,39 @@ from playwright.async_api import (
 from .context import StagehandContext
 from .logging import StagehandLogger
 from .page import StagehandPage
+
+# Protocol for AWS BrowserClient interface (for type safety)
+@runtime_checkable
+class AWSBrowserClientProtocol(Protocol):
+    """Protocol defining the interface for AWS AgentCore BrowserClient."""
+    session_id: Optional[str]
+
+    def start(
+        self,
+        identifier: Optional[str] = None,
+        name: Optional[str] = None,
+        session_timeout_seconds: Optional[int] = None,
+        viewport: Optional[dict[str, int]] = None,
+    ) -> str:
+        """Start a new browser session."""
+        ...
+
+    def stop(self) -> None:
+        """Stop the browser session."""
+        ...
+
+    def generate_ws_headers(self) -> tuple[str, dict[str, str]]:
+        """Generate WebSocket URL and authentication headers."""
+        ...
+
+
+# AWS AgentCore Browser support - import conditionally
+try:
+    from bedrock_agentcore.tools.browser_client import BrowserClient
+    AWS_AGENTCORE_AVAILABLE = True
+except ImportError:
+    AWS_AGENTCORE_AVAILABLE = False
+    BrowserClient = None
 
 
 async def connect_browserbase_browser(
@@ -101,6 +134,352 @@ async def connect_browserbase_browser(
         page = await stagehand_context.new_page()
 
     return browser, context, stagehand_context, page
+
+
+def _validate_aws_region(aws_region: Optional[str]) -> str:
+    """
+    Validate AWS region format and presence.
+
+    Args:
+        aws_region: AWS region string to validate
+
+    Returns:
+        Validated and stripped region string
+
+    Raises:
+        ValueError: If region is missing or has invalid format
+    """
+    import re
+
+    if not aws_region or not aws_region.strip():
+        raise ValueError(
+            "aws_region is required for AWS environment. "
+            "Set it via config.aws_region or AWS_REGION environment variable."
+        )
+
+    region = aws_region.strip()
+    if not re.match(r'^[a-z]{2}-[a-z]+-\d+$', region):
+        raise ValueError(
+            f"Invalid AWS region format: '{aws_region}'. "
+            "Expected format: 'us-west-2', 'eu-central-1', etc."
+        )
+
+    return region
+
+
+def _validate_aws_session_create_params(params: Optional[dict[str, Any]]) -> dict[str, Any]:
+    """
+    Validate AWS session create parameters.
+
+    Args:
+        params: Session create parameters to validate
+
+    Returns:
+        Validated parameters dict (empty dict if None)
+
+    Raises:
+        ValueError: If parameters have invalid types or values
+    """
+    if params is None:
+        return {}
+
+    if not isinstance(params, dict):
+        raise ValueError(
+            f"aws_session_create_params must be a dict, got {type(params).__name__}"
+        )
+
+    validated = {}
+
+    # Validate identifier (string or None)
+    if identifier := params.get("identifier"):
+        if not isinstance(identifier, str):
+            raise ValueError(
+                f"identifier must be a string, got {type(identifier).__name__}"
+            )
+        validated["identifier"] = identifier
+
+    # Validate name (string or None)
+    if name := params.get("name"):
+        if not isinstance(name, str):
+            raise ValueError(
+                f"name must be a string, got {type(name).__name__}"
+            )
+        validated["name"] = name
+
+    # Validate session_timeout_seconds (int, 1-28800)
+    if session_timeout := params.get("session_timeout_seconds"):
+        if not isinstance(session_timeout, int):
+            raise ValueError(
+                f"session_timeout_seconds must be an int, got {type(session_timeout).__name__}"
+            )
+        if session_timeout < 1 or session_timeout > 28800:
+            raise ValueError(
+                f"session_timeout_seconds must be between 1 and 28800, got {session_timeout}"
+            )
+        validated["session_timeout_seconds"] = session_timeout
+
+    # Validate viewport (dict with width and height)
+    if viewport := params.get("viewport"):
+        if not isinstance(viewport, dict):
+            raise ValueError(
+                f"viewport must be a dict, got {type(viewport).__name__}"
+            )
+        if "width" not in viewport or "height" not in viewport:
+            raise ValueError(
+                "viewport must contain 'width' and 'height' keys"
+            )
+        if not isinstance(viewport.get("width"), int) or not isinstance(viewport.get("height"), int):
+            raise ValueError(
+                "viewport width and height must be integers"
+            )
+        validated["viewport"] = viewport
+
+    return validated
+
+
+def _create_aws_browser_client(
+    aws_region: str,
+    aws_profile: Optional[str],
+    aws_session_id: Optional[str],
+    aws_session_create_params: Optional[dict[str, Any]],
+    stagehand_instance: Any,
+    logger: StagehandLogger,
+) -> AWSBrowserClientProtocol:
+    """
+    Create and initialize AWS BrowserClient.
+
+    Args:
+        aws_region: Validated AWS region
+        aws_profile: Optional AWS profile name
+        aws_session_id: Optional session ID for resuming
+        aws_session_create_params: Session create parameters (identifier, name, session_timeout_seconds, viewport)
+        stagehand_instance: Stagehand instance to store session ID
+        logger: Logger instance
+
+    Returns:
+        Initialized BrowserClient
+
+    Raises:
+        RuntimeError: If bedrock-agentcore package is not installed
+        RuntimeError: If session resume fails
+        ValueError: If session create params are invalid
+    """
+    # Validate session create params early
+    validated_params = _validate_aws_session_create_params(aws_session_create_params)
+
+    if not AWS_AGENTCORE_AVAILABLE:
+        raise RuntimeError(
+            "AWS AgentCore Browser support requires the 'bedrock-agentcore' package. "
+            "Install it with: pip install stagehand[aws]"
+        )
+
+    # Create boto3 session with profile if specified
+    import boto3
+    if aws_profile:
+        logger.debug(f"Creating boto3 session with profile: {aws_profile}")
+        boto3_session = boto3.Session(profile_name=aws_profile)
+        browser_client = BrowserClient(region=aws_region, boto3_session=boto3_session)
+    else:
+        browser_client = BrowserClient(region=aws_region)
+
+    if aws_session_id:
+        logger.info(f"Resuming AWS AgentCore Browser session: {aws_session_id}")
+        try:
+            browser_client.session_id = aws_session_id
+            # Verify the session is valid by checking if we can generate headers
+            browser_client.generate_ws_headers()
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to resume AWS session '{aws_session_id}': {e}. "
+                "The session may have expired or been terminated."
+            ) from e
+    else:
+        # Extract session create parameters from validated params
+        identifier = validated_params.get("identifier")
+        name = validated_params.get("name")
+        session_timeout = validated_params.get("session_timeout_seconds")
+        viewport = validated_params.get("viewport")
+
+        if identifier:
+            logger.info(f"Starting new AWS AgentCore Browser session with identifier: {identifier}")
+        else:
+            logger.info("Starting new AWS AgentCore Browser session...")
+
+        browser_client.start(
+            identifier=identifier,
+            name=name,
+            session_timeout_seconds=session_timeout,
+            viewport=viewport,
+        )
+        logger.info(f"AWS session created with ID: {browser_client.session_id}")
+        stagehand_instance.aws_session_id = browser_client.session_id
+
+    return browser_client
+
+
+def _validate_websocket_url(ws_url: Any) -> str:
+    """
+    Validate WebSocket URL returned by BrowserClient.
+
+    Args:
+        ws_url: WebSocket URL to validate
+
+    Returns:
+        Validated WebSocket URL string
+
+    Raises:
+        RuntimeError: If URL is invalid
+    """
+    if not ws_url or not isinstance(ws_url, str):
+        raise RuntimeError(
+            f"BrowserClient.generate_ws_headers() returned invalid WebSocket URL: {ws_url}"
+        )
+    if not ws_url.startswith(('ws://', 'wss://')):
+        raise RuntimeError(
+            f"Invalid WebSocket URL format (expected ws:// or wss://): {ws_url}"
+        )
+    return ws_url
+
+
+async def _connect_aws_cdp(
+    playwright: Playwright,
+    browser_client: AWSBrowserClientProtocol,
+    logger: StagehandLogger,
+) -> Browser:
+    """
+    Connect to AWS browser via CDP.
+
+    Args:
+        playwright: Playwright instance
+        browser_client: Initialized AWS BrowserClient
+        logger: Logger instance
+
+    Returns:
+        Connected Browser instance
+
+    Raises:
+        RuntimeError: If connection fails or times out
+    """
+    import asyncio
+
+    ws_url, headers = browser_client.generate_ws_headers()
+    _validate_websocket_url(ws_url)
+
+    logger.debug("Connecting to AWS AgentCore Browser via CDP...")
+    try:
+        browser = await asyncio.wait_for(
+            playwright.chromium.connect_over_cdp(ws_url, headers=headers),
+            timeout=30.0
+        )
+    except asyncio.TimeoutError:
+        raise RuntimeError(
+            "AWS AgentCore Browser connection timeout after 30 seconds. "
+            "Check your network connection and AWS region availability."
+        )
+
+    return browser
+
+
+async def _cleanup_aws_on_failure(
+    context: Optional[BrowserContext],
+    browser: Optional[Browser],
+    browser_client: Optional[AWSBrowserClientProtocol],
+    logger: StagehandLogger,
+) -> None:
+    """
+    Clean up AWS resources after a connection failure.
+
+    Args:
+        context: Browser context to close
+        browser: Browser to close
+        browser_client: AWS client to stop
+        logger: Logger instance
+    """
+    if context:
+        try:
+            await context.close()
+        except Exception as e:
+            logger.warning(f"Failed to close context during cleanup: {e}")
+
+    if browser:
+        try:
+            await browser.close()
+        except Exception as e:
+            logger.warning(f"Failed to close browser during cleanup: {e}")
+
+    if browser_client:
+        try:
+            browser_client.stop()
+        except Exception as e:
+            session_id = getattr(browser_client, 'session_id', 'unknown')
+            logger.error(
+                f"Failed to stop AWS browser client: {e}. "
+                f"Session may still be running: {session_id}"
+            )
+
+
+async def connect_aws_agentcore_browser(
+    playwright: Playwright,
+    aws_region: str,
+    aws_profile: Optional[str],
+    aws_session_id: Optional[str],
+    aws_session_create_params: Optional[dict[str, Any]],
+    stagehand_instance: Any,
+    logger: StagehandLogger,
+) -> tuple[Browser, BrowserContext, StagehandContext, StagehandPage, AWSBrowserClientProtocol]:
+    """
+    Connect to an AWS AgentCore Browser session.
+
+    Args:
+        playwright: Playwright instance
+        aws_region: AWS region (e.g., 'us-west-2')
+        aws_profile: AWS profile name for credentials
+        aws_session_id: Session ID for resuming existing sessions
+        aws_session_create_params: Session create parameters (identifier, name, session_timeout_seconds, viewport)
+        stagehand_instance: Stagehand instance for context initialization
+        logger: Logger instance
+
+    Returns:
+        Tuple of (browser, context, stagehand_context, page, browser_client)
+
+    Raises:
+        RuntimeError: If package not installed or connection fails
+        ValueError: If aws_region is invalid
+    """
+    region = _validate_aws_region(aws_region)
+    logger.info(f"Connecting to AWS AgentCore Browser in region: {region}")
+
+    browser_client = None
+    browser = None
+    context = None
+
+    try:
+        browser_client = _create_aws_browser_client(
+            region, aws_profile, aws_session_id, aws_session_create_params, stagehand_instance, logger
+        )
+
+        browser = await _connect_aws_cdp(playwright, browser_client, logger)
+
+        existing_contexts = browser.contexts
+        if existing_contexts:
+            context = existing_contexts[0]
+        else:
+            context = await browser.new_context()
+
+        stagehand_context = await StagehandContext.init(context, stagehand_instance)
+
+        existing_pages = context.pages
+        if existing_pages:
+            page = await stagehand_context.get_stagehand_page(existing_pages[0])
+        else:
+            page = await stagehand_context.new_page()
+
+        return browser, context, stagehand_context, page, browser_client
+
+    except Exception as e:
+        logger.error(f"Failed to connect to AWS AgentCore Browser: {e}")
+        await _cleanup_aws_on_failure(context, browser, browser_client, logger)
+        raise
 
 
 async def connect_local_browser(
@@ -311,6 +690,7 @@ async def cleanup_browser_resources(
     playwright: Optional[Playwright],
     temp_user_data_dir: Optional[Path],
     logger: StagehandLogger,
+    aws_browser_client: Optional[AWSBrowserClientProtocol] = None,
 ):
     """
     Clean up browser resources.
@@ -321,7 +701,17 @@ async def cleanup_browser_resources(
         playwright: The Playwright instance
         temp_user_data_dir: Temporary user data directory to remove (if any)
         logger: The logger instance
+        aws_browser_client: AWS AgentCore BrowserClient instance (if any)
     """
+    # Clean up AWS browser client first if it exists
+    if aws_browser_client:
+        try:
+            logger.debug("Stopping AWS AgentCore Browser session...")
+            aws_browser_client.stop()
+            logger.debug("AWS AgentCore Browser session stopped successfully")
+        except Exception as e:
+            logger.error(f"Error stopping AWS browser client: {str(e)}")
+
     if context:
         try:
             logger.debug("Closing browser context...")
