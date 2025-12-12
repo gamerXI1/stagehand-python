@@ -3,7 +3,7 @@ import os
 import shutil
 import tempfile
 from pathlib import Path
-from typing import Any, Optional
+from typing import Any, Optional, Protocol, runtime_checkable
 
 from browserbase import Browserbase
 from browserbase.types import SessionCreateParams as BrowserbaseSessionCreateParams
@@ -17,6 +17,25 @@ from .context import StagehandContext
 from .logging import StagehandLogger
 from .page import StagehandPage
 
+# Protocol for AWS BrowserClient interface (for type safety)
+@runtime_checkable
+class AWSBrowserClientProtocol(Protocol):
+    """Protocol defining the interface for AWS AgentCore BrowserClient."""
+    session_id: Optional[str]
+
+    def start(self) -> None:
+        """Start a new browser session."""
+        ...
+
+    def stop(self) -> None:
+        """Stop the browser session."""
+        ...
+
+    def generate_ws_headers(self) -> tuple[str, dict[str, str]]:
+        """Generate WebSocket URL and authentication headers."""
+        ...
+
+
 # AWS AgentCore Browser support - import conditionally
 try:
     from bedrock_agentcore.tools.browser_client import BrowserClient
@@ -24,9 +43,6 @@ try:
 except ImportError:
     AWS_AGENTCORE_AVAILABLE = False
     BrowserClient = None
-
-# Type alias for AWS browser client (Any when not available, BrowserClient when available)
-AWSBrowserClient = Any
 
 
 async def connect_browserbase_browser(
@@ -151,7 +167,7 @@ def _create_aws_browser_client(
     aws_session_id: Optional[str],
     stagehand_instance: Any,
     logger: StagehandLogger,
-) -> AWSBrowserClient:
+) -> AWSBrowserClientProtocol:
     """
     Create and initialize AWS BrowserClient.
 
@@ -167,6 +183,7 @@ def _create_aws_browser_client(
 
     Raises:
         RuntimeError: If bedrock-agentcore package is not installed
+        RuntimeError: If session resume fails
     """
     if not AWS_AGENTCORE_AVAILABLE:
         raise RuntimeError(
@@ -185,7 +202,15 @@ def _create_aws_browser_client(
 
     if aws_session_id:
         logger.info(f"Resuming AWS AgentCore Browser session: {aws_session_id}")
-        browser_client.session_id = aws_session_id
+        try:
+            browser_client.session_id = aws_session_id
+            # Verify the session is valid by checking if we can generate headers
+            browser_client.generate_ws_headers()
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to resume AWS session '{aws_session_id}': {e}. "
+                "The session may have expired or been terminated."
+            ) from e
     else:
         logger.info("Starting new AWS AgentCore Browser session...")
         browser_client.start()
@@ -221,7 +246,7 @@ def _validate_websocket_url(ws_url: Any) -> str:
 
 async def _connect_aws_cdp(
     playwright: Playwright,
-    browser_client: AWSBrowserClient,
+    browser_client: AWSBrowserClientProtocol,
     logger: StagehandLogger,
 ) -> Browser:
     """
@@ -261,7 +286,7 @@ async def _connect_aws_cdp(
 async def _cleanup_aws_on_failure(
     context: Optional[BrowserContext],
     browser: Optional[Browser],
-    browser_client: Optional[AWSBrowserClient],
+    browser_client: Optional[AWSBrowserClientProtocol],
     logger: StagehandLogger,
 ) -> None:
     """
@@ -303,7 +328,7 @@ async def connect_aws_agentcore_browser(
     aws_session_id: Optional[str],
     stagehand_instance: Any,
     logger: StagehandLogger,
-) -> tuple[Browser, BrowserContext, StagehandContext, StagehandPage, AWSBrowserClient]:
+) -> tuple[Browser, BrowserContext, StagehandContext, StagehandPage, AWSBrowserClientProtocol]:
     """
     Connect to an AWS AgentCore Browser session.
 
@@ -566,7 +591,7 @@ async def cleanup_browser_resources(
     playwright: Optional[Playwright],
     temp_user_data_dir: Optional[Path],
     logger: StagehandLogger,
-    aws_browser_client: Optional[Any] = None,
+    aws_browser_client: Optional[AWSBrowserClientProtocol] = None,
 ):
     """
     Clean up browser resources.
