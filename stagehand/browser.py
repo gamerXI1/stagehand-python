@@ -167,11 +167,81 @@ def _validate_aws_region(aws_region: Optional[str]) -> str:
     return region
 
 
+def _validate_aws_session_create_params(params: Optional[dict[str, Any]]) -> dict[str, Any]:
+    """
+    Validate AWS session create parameters.
+
+    Args:
+        params: Session create parameters to validate
+
+    Returns:
+        Validated parameters dict (empty dict if None)
+
+    Raises:
+        ValueError: If parameters have invalid types or values
+    """
+    if params is None:
+        return {}
+
+    if not isinstance(params, dict):
+        raise ValueError(
+            f"aws_session_create_params must be a dict, got {type(params).__name__}"
+        )
+
+    validated = {}
+
+    # Validate identifier (string or None)
+    if identifier := params.get("identifier"):
+        if not isinstance(identifier, str):
+            raise ValueError(
+                f"identifier must be a string, got {type(identifier).__name__}"
+            )
+        validated["identifier"] = identifier
+
+    # Validate name (string or None)
+    if name := params.get("name"):
+        if not isinstance(name, str):
+            raise ValueError(
+                f"name must be a string, got {type(name).__name__}"
+            )
+        validated["name"] = name
+
+    # Validate session_timeout_seconds (int, 1-28800)
+    if session_timeout := params.get("session_timeout_seconds"):
+        if not isinstance(session_timeout, int):
+            raise ValueError(
+                f"session_timeout_seconds must be an int, got {type(session_timeout).__name__}"
+            )
+        if session_timeout < 1 or session_timeout > 28800:
+            raise ValueError(
+                f"session_timeout_seconds must be between 1 and 28800, got {session_timeout}"
+            )
+        validated["session_timeout_seconds"] = session_timeout
+
+    # Validate viewport (dict with width and height)
+    if viewport := params.get("viewport"):
+        if not isinstance(viewport, dict):
+            raise ValueError(
+                f"viewport must be a dict, got {type(viewport).__name__}"
+            )
+        if "width" not in viewport or "height" not in viewport:
+            raise ValueError(
+                "viewport must contain 'width' and 'height' keys"
+            )
+        if not isinstance(viewport.get("width"), int) or not isinstance(viewport.get("height"), int):
+            raise ValueError(
+                "viewport width and height must be integers"
+            )
+        validated["viewport"] = viewport
+
+    return validated
+
+
 def _create_aws_browser_client(
     aws_region: str,
     aws_profile: Optional[str],
     aws_session_id: Optional[str],
-    aws_session_create_params: dict[str, Any],
+    aws_session_create_params: Optional[dict[str, Any]],
     stagehand_instance: Any,
     logger: StagehandLogger,
 ) -> AWSBrowserClientProtocol:
@@ -192,7 +262,11 @@ def _create_aws_browser_client(
     Raises:
         RuntimeError: If bedrock-agentcore package is not installed
         RuntimeError: If session resume fails
+        ValueError: If session create params are invalid
     """
+    # Validate session create params early
+    validated_params = _validate_aws_session_create_params(aws_session_create_params)
+
     if not AWS_AGENTCORE_AVAILABLE:
         raise RuntimeError(
             "AWS AgentCore Browser support requires the 'bedrock-agentcore' package. "
@@ -220,11 +294,11 @@ def _create_aws_browser_client(
                 "The session may have expired or been terminated."
             ) from e
     else:
-        # Extract session create parameters
-        identifier = aws_session_create_params.get("identifier")
-        name = aws_session_create_params.get("name")
-        session_timeout = aws_session_create_params.get("session_timeout_seconds")
-        viewport = aws_session_create_params.get("viewport")
+        # Extract session create parameters from validated params
+        identifier = validated_params.get("identifier")
+        name = validated_params.get("name")
+        session_timeout = validated_params.get("session_timeout_seconds")
+        viewport = validated_params.get("viewport")
 
         if identifier:
             logger.info(f"Starting new AWS AgentCore Browser session with identifier: {identifier}")
@@ -349,7 +423,7 @@ async def connect_aws_agentcore_browser(
     aws_region: str,
     aws_profile: Optional[str],
     aws_session_id: Optional[str],
-    aws_session_create_params: dict[str, Any],
+    aws_session_create_params: Optional[dict[str, Any]],
     stagehand_instance: Any,
     logger: StagehandLogger,
 ) -> tuple[Browser, BrowserContext, StagehandContext, StagehandPage, AWSBrowserClientProtocol]:

@@ -7,6 +7,7 @@ import pytest
 
 from stagehand.browser import (
     _validate_aws_region,
+    _validate_aws_session_create_params,
     _validate_websocket_url,
     _create_aws_browser_client,
     _connect_aws_cdp,
@@ -78,6 +79,128 @@ class TestValidateAWSRegion:
         """Test invalid region format missing parts."""
         with pytest.raises(ValueError, match="Invalid AWS region format"):
             _validate_aws_region("us2")
+
+
+class TestValidateAWSSessionCreateParams:
+    """Tests for _validate_aws_session_create_params function."""
+
+    def test_none_returns_empty_dict(self):
+        """Test None input returns empty dict."""
+        result = _validate_aws_session_create_params(None)
+        assert result == {}
+
+    def test_empty_dict_returns_empty_dict(self):
+        """Test empty dict input returns empty dict."""
+        result = _validate_aws_session_create_params({})
+        assert result == {}
+
+    def test_non_dict_raises_error(self):
+        """Test non-dict input raises ValueError."""
+        with pytest.raises(ValueError, match="must be a dict"):
+            _validate_aws_session_create_params("not a dict")
+
+    def test_non_dict_list_raises_error(self):
+        """Test list input raises ValueError."""
+        with pytest.raises(ValueError, match="must be a dict"):
+            _validate_aws_session_create_params(["item"])
+
+    def test_valid_identifier_string(self):
+        """Test valid identifier string is accepted."""
+        result = _validate_aws_session_create_params({"identifier": "my-browser"})
+        assert result == {"identifier": "my-browser"}
+
+    def test_invalid_identifier_type(self):
+        """Test non-string identifier raises ValueError."""
+        with pytest.raises(ValueError, match="identifier must be a string"):
+            _validate_aws_session_create_params({"identifier": 123})
+
+    def test_valid_name_string(self):
+        """Test valid name string is accepted."""
+        result = _validate_aws_session_create_params({"name": "my-session"})
+        assert result == {"name": "my-session"}
+
+    def test_invalid_name_type(self):
+        """Test non-string name raises ValueError."""
+        with pytest.raises(ValueError, match="name must be a string"):
+            _validate_aws_session_create_params({"name": ["invalid"]})
+
+    def test_valid_session_timeout(self):
+        """Test valid session_timeout_seconds is accepted."""
+        result = _validate_aws_session_create_params({"session_timeout_seconds": 1800})
+        assert result == {"session_timeout_seconds": 1800}
+
+    def test_session_timeout_min_value(self):
+        """Test minimum session_timeout_seconds value."""
+        result = _validate_aws_session_create_params({"session_timeout_seconds": 1})
+        assert result == {"session_timeout_seconds": 1}
+
+    def test_session_timeout_max_value(self):
+        """Test maximum session_timeout_seconds value."""
+        result = _validate_aws_session_create_params({"session_timeout_seconds": 28800})
+        assert result == {"session_timeout_seconds": 28800}
+
+    def test_session_timeout_below_min(self):
+        """Test session_timeout_seconds below minimum raises ValueError."""
+        with pytest.raises(ValueError, match="must be between 1 and 28800"):
+            _validate_aws_session_create_params({"session_timeout_seconds": 0})
+
+    def test_session_timeout_above_max(self):
+        """Test session_timeout_seconds above maximum raises ValueError."""
+        with pytest.raises(ValueError, match="must be between 1 and 28800"):
+            _validate_aws_session_create_params({"session_timeout_seconds": 28801})
+
+    def test_session_timeout_invalid_type(self):
+        """Test non-int session_timeout_seconds raises ValueError."""
+        with pytest.raises(ValueError, match="session_timeout_seconds must be an int"):
+            _validate_aws_session_create_params({"session_timeout_seconds": "1800"})
+
+    def test_valid_viewport(self):
+        """Test valid viewport is accepted."""
+        result = _validate_aws_session_create_params({
+            "viewport": {"width": 1920, "height": 1080}
+        })
+        assert result == {"viewport": {"width": 1920, "height": 1080}}
+
+    def test_viewport_missing_width(self):
+        """Test viewport missing width raises ValueError."""
+        with pytest.raises(ValueError, match="must contain 'width' and 'height'"):
+            _validate_aws_session_create_params({"viewport": {"height": 1080}})
+
+    def test_viewport_missing_height(self):
+        """Test viewport missing height raises ValueError."""
+        with pytest.raises(ValueError, match="must contain 'width' and 'height'"):
+            _validate_aws_session_create_params({"viewport": {"width": 1920}})
+
+    def test_viewport_invalid_type(self):
+        """Test non-dict viewport raises ValueError."""
+        with pytest.raises(ValueError, match="viewport must be a dict"):
+            _validate_aws_session_create_params({"viewport": "1920x1080"})
+
+    def test_viewport_invalid_dimension_type(self):
+        """Test non-int viewport dimensions raises ValueError."""
+        with pytest.raises(ValueError, match="width and height must be integers"):
+            _validate_aws_session_create_params({
+                "viewport": {"width": "1920", "height": 1080}
+            })
+
+    def test_all_valid_params(self):
+        """Test all valid params are accepted."""
+        params = {
+            "identifier": "my-browser",
+            "name": "my-session",
+            "session_timeout_seconds": 1800,
+            "viewport": {"width": 1920, "height": 1080},
+        }
+        result = _validate_aws_session_create_params(params)
+        assert result == params
+
+    def test_ignores_unknown_keys(self):
+        """Test unknown keys are ignored."""
+        result = _validate_aws_session_create_params({
+            "identifier": "my-browser",
+            "unknown_key": "value",
+        })
+        assert result == {"identifier": "my-browser"}
 
 
 class TestValidateWebsocketUrl:
