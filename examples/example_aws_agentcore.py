@@ -19,10 +19,29 @@ class Companies(BaseModel):
 
 async def main():
     # Create configuration for AWS AgentCore Browser
+    # For session recording to S3, first create a custom browser with recording enabled:
+    #   aws bedrock-agentcore-control create-browser \
+    #     --region us-west-2 \
+    #     --name "my-recording-browser" \
+    #     --recording '{"enabled": true, "s3Location": {"bucket": "my-bucket", "prefix": "recordings"}}' \
+    #     --execution-role-arn "arn:aws:iam::123456789012:role/AgentCoreBrowserRole"
+    #
+    # Then pass the browser identifier in aws_session_create_params:
+    #   aws_session_create_params={
+    #       "identifier": "my-recording-browser",  # Custom browser with S3 recording
+    #       "session_timeout_seconds": 1800,       # 30 minutes
+    #       "viewport": {"width": 1920, "height": 1080},
+    #   }
+
     config = StagehandConfig(
         env="AWS",  # Use AWS AgentCore Browser
         aws_region=os.getenv("AWS_REGION", "us-west-2"),  # AWS region
         aws_profile=os.getenv("AWS_PROFILE"),  # Optional: AWS profile name
+        # aws_session_create_params={  # Uncomment to use custom browser with recording
+        #     "identifier": os.getenv("AWS_BROWSER_IDENTIFIER"),
+        #     "session_timeout_seconds": 1800,
+        #     "viewport": {"width": 1920, "height": 1080},
+        # },
         model_name="google/gemini-2.5-flash-preview-05-20",
         model_client_options={"apiKey": os.getenv("MODEL_API_KEY")},
         verbose=2,  # Set to 2 for detailed logs
@@ -80,6 +99,10 @@ if __name__ == "__main__":
     # 2. bedrock-agentcore package installed: pip install stagehand[aws]
     # 3. AWS_REGION environment variable set (e.g., us-west-2, us-east-1)
     # 4. Appropriate IAM permissions for AgentCore Browser
+    #
+    # For session recording to S3:
+    # 5. Create a custom browser with recording enabled (see comments in main())
+    # 6. Set aws_session_create_params with the custom browser identifier
 
     print("=" * 60)
     print("AWS AgentCore Browser Example")
@@ -89,6 +112,9 @@ if __name__ == "__main__":
     print("  - bedrock-agentcore installed (pip install stagehand[aws])")
     print("  - AWS_REGION environment variable set")
     print("  - MODEL_API_KEY environment variable set")
+    print("\nOptional (for session recording):")
+    print("  - Create custom browser with recording enabled")
+    print("  - Set AWS_BROWSER_IDENTIFIER environment variable")
     print("=" * 60)
 
     asyncio.run(main())

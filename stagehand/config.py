@@ -21,6 +21,7 @@ class StagehandConfig(BaseModel):
         aws_region (Optional[str]): AWS region for AgentCore Browser (e.g., 'us-west-2').
         aws_profile (Optional[str]): AWS profile name for credentials.
         aws_session_id (Optional[str]): Session ID for resuming AWS AgentCore Browser sessions.
+        aws_session_create_params (Optional[dict]): AWS session create params (identifier, name, session_timeout_seconds, viewport).
         model_name (Optional[str]): Name of the model to use.
         model_api_key (Optional[str]): Model API key.
         model_client_options (Optional[dict[str, Any]]): Options for the model client.
@@ -102,6 +103,11 @@ class StagehandConfig(BaseModel):
         None,
         alias="awsSessionID",
         description="Session ID for resuming AWS AgentCore Browser sessions",
+    )
+    aws_session_create_params: Optional[dict[str, Any]] = Field(
+        None,
+        alias="awsSessionCreateParams",
+        description="AWS AgentCore Browser session create params (identifier, name, session_timeout_seconds, viewport)",
     )
     model_name: Optional[str] = Field(
         AvailableModel.GPT_4_1_MINI,

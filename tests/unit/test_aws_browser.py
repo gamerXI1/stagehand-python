@@ -142,7 +142,7 @@ class TestCreateAWSBrowserClient:
         """Test raises RuntimeError when bedrock-agentcore not installed."""
         with pytest.raises(RuntimeError, match="bedrock-agentcore"):
             _create_aws_browser_client(
-                "us-west-2", None, None, mock_stagehand, mock_logger
+                "us-west-2", None, None, {}, mock_stagehand, mock_logger
             )
 
     @pytest.mark.skipif(not AWS_AGENTCORE_AVAILABLE, reason="AWS package not available")
@@ -159,14 +159,16 @@ class TestCreateAWSBrowserClient:
         mock_browser_client.return_value = mock_client
 
         result = _create_aws_browser_client(
-            "us-west-2", "my-profile", None, mock_stagehand, mock_logger
+            "us-west-2", "my-profile", None, {}, mock_stagehand, mock_logger
         )
 
         mock_boto3.Session.assert_called_once_with(profile_name="my-profile")
         mock_browser_client.assert_called_once_with(
             region="us-west-2", boto3_session=mock_session
         )
-        mock_client.start.assert_called_once()
+        mock_client.start.assert_called_once_with(
+            identifier=None, name=None, session_timeout_seconds=None, viewport=None
+        )
 
     @pytest.mark.skipif(not AWS_AGENTCORE_AVAILABLE, reason="AWS package not available")
     @mock.patch("stagehand.browser.BrowserClient")
@@ -180,12 +182,14 @@ class TestCreateAWSBrowserClient:
         mock_browser_client.return_value = mock_client
 
         result = _create_aws_browser_client(
-            "us-west-2", None, None, mock_stagehand, mock_logger
+            "us-west-2", None, None, {}, mock_stagehand, mock_logger
         )
 
         mock_boto3.Session.assert_not_called()
         mock_browser_client.assert_called_once_with(region="us-west-2")
-        mock_client.start.assert_called_once()
+        mock_client.start.assert_called_once_with(
+            identifier=None, name=None, session_timeout_seconds=None, viewport=None
+        )
 
     @pytest.mark.skipif(not AWS_AGENTCORE_AVAILABLE, reason="AWS package not available")
     @mock.patch("stagehand.browser.BrowserClient")
@@ -198,7 +202,7 @@ class TestCreateAWSBrowserClient:
         mock_browser_client.return_value = mock_client
 
         result = _create_aws_browser_client(
-            "us-west-2", None, "existing-session-id", mock_stagehand, mock_logger
+            "us-west-2", None, "existing-session-id", {}, mock_stagehand, mock_logger
         )
 
         mock_client.start.assert_not_called()
@@ -219,7 +223,7 @@ class TestCreateAWSBrowserClient:
 
         with pytest.raises(RuntimeError, match="Failed to resume AWS session"):
             _create_aws_browser_client(
-                "us-west-2", None, "expired-session-id", mock_stagehand, mock_logger
+                "us-west-2", None, "expired-session-id", {}, mock_stagehand, mock_logger
             )
 
     @pytest.mark.skipif(not AWS_AGENTCORE_AVAILABLE, reason="AWS package not available")
@@ -234,10 +238,65 @@ class TestCreateAWSBrowserClient:
         mock_browser_client.return_value = mock_client
 
         _create_aws_browser_client(
-            "us-west-2", None, None, mock_stagehand, mock_logger
+            "us-west-2", None, None, {}, mock_stagehand, mock_logger
         )
 
         assert mock_stagehand.aws_session_id == "new-session-id"
+
+    @pytest.mark.skipif(not AWS_AGENTCORE_AVAILABLE, reason="AWS package not available")
+    @mock.patch("stagehand.browser.BrowserClient")
+    @mock.patch("stagehand.browser.boto3")
+    def test_passes_session_create_params(
+        self, mock_boto3, mock_browser_client, mock_logger, mock_stagehand
+    ):
+        """Test passes session create params to start()."""
+        mock_client = MagicMock()
+        mock_client.session_id = "test-session-id"
+        mock_browser_client.return_value = mock_client
+
+        session_params = {
+            "identifier": "my-recording-browser",
+            "name": "test-session",
+            "session_timeout_seconds": 1800,
+            "viewport": {"width": 1920, "height": 1080},
+        }
+
+        _create_aws_browser_client(
+            "us-west-2", None, None, session_params, mock_stagehand, mock_logger
+        )
+
+        mock_client.start.assert_called_once_with(
+            identifier="my-recording-browser",
+            name="test-session",
+            session_timeout_seconds=1800,
+            viewport={"width": 1920, "height": 1080},
+        )
+
+    @pytest.mark.skipif(not AWS_AGENTCORE_AVAILABLE, reason="AWS package not available")
+    @mock.patch("stagehand.browser.BrowserClient")
+    @mock.patch("stagehand.browser.boto3")
+    def test_passes_partial_session_create_params(
+        self, mock_boto3, mock_browser_client, mock_logger, mock_stagehand
+    ):
+        """Test passes partial session create params to start()."""
+        mock_client = MagicMock()
+        mock_client.session_id = "test-session-id"
+        mock_browser_client.return_value = mock_client
+
+        session_params = {
+            "identifier": "my-custom-browser",
+        }
+
+        _create_aws_browser_client(
+            "us-west-2", None, None, session_params, mock_stagehand, mock_logger
+        )
+
+        mock_client.start.assert_called_once_with(
+            identifier="my-custom-browser",
+            name=None,
+            session_timeout_seconds=None,
+            viewport=None,
+        )
 
 
 class TestConnectAWSCDP:
@@ -411,8 +470,14 @@ class TestAWSBrowserClientProtocol:
         class MockBrowserClient:
             session_id: Optional[str] = None
 
-            def start(self) -> None:
-                pass
+            def start(
+                self,
+                identifier: Optional[str] = None,
+                name: Optional[str] = None,
+                session_timeout_seconds: Optional[int] = None,
+                viewport: Optional[dict[str, int]] = None,
+            ) -> str:
+                return "session-id"
 
             def stop(self) -> None:
                 pass
@@ -429,8 +494,14 @@ class TestAWSBrowserClientProtocol:
         class IncompleteBrowserClient:
             session_id: Optional[str] = None
 
-            def start(self) -> None:
-                pass
+            def start(
+                self,
+                identifier: Optional[str] = None,
+                name: Optional[str] = None,
+                session_timeout_seconds: Optional[int] = None,
+                viewport: Optional[dict[str, int]] = None,
+            ) -> str:
+                return "session-id"
             # Missing stop() and generate_ws_headers()
 
         client = IncompleteBrowserClient()

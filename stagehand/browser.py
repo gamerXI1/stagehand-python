@@ -23,7 +23,13 @@ class AWSBrowserClientProtocol(Protocol):
     """Protocol defining the interface for AWS AgentCore BrowserClient."""
     session_id: Optional[str]
 
-    def start(self) -> None:
+    def start(
+        self,
+        identifier: Optional[str] = None,
+        name: Optional[str] = None,
+        session_timeout_seconds: Optional[int] = None,
+        viewport: Optional[dict[str, int]] = None,
+    ) -> str:
         """Start a new browser session."""
         ...
 
@@ -165,6 +171,7 @@ def _create_aws_browser_client(
     aws_region: str,
     aws_profile: Optional[str],
     aws_session_id: Optional[str],
+    aws_session_create_params: dict[str, Any],
     stagehand_instance: Any,
     logger: StagehandLogger,
 ) -> AWSBrowserClientProtocol:
@@ -175,6 +182,7 @@ def _create_aws_browser_client(
         aws_region: Validated AWS region
         aws_profile: Optional AWS profile name
         aws_session_id: Optional session ID for resuming
+        aws_session_create_params: Session create parameters (identifier, name, session_timeout_seconds, viewport)
         stagehand_instance: Stagehand instance to store session ID
         logger: Logger instance
 
@@ -212,8 +220,23 @@ def _create_aws_browser_client(
                 "The session may have expired or been terminated."
             ) from e
     else:
-        logger.info("Starting new AWS AgentCore Browser session...")
-        browser_client.start()
+        # Extract session create parameters
+        identifier = aws_session_create_params.get("identifier")
+        name = aws_session_create_params.get("name")
+        session_timeout = aws_session_create_params.get("session_timeout_seconds")
+        viewport = aws_session_create_params.get("viewport")
+
+        if identifier:
+            logger.info(f"Starting new AWS AgentCore Browser session with identifier: {identifier}")
+        else:
+            logger.info("Starting new AWS AgentCore Browser session...")
+
+        browser_client.start(
+            identifier=identifier,
+            name=name,
+            session_timeout_seconds=session_timeout,
+            viewport=viewport,
+        )
         logger.info(f"AWS session created with ID: {browser_client.session_id}")
         stagehand_instance.aws_session_id = browser_client.session_id
 
@@ -326,6 +349,7 @@ async def connect_aws_agentcore_browser(
     aws_region: str,
     aws_profile: Optional[str],
     aws_session_id: Optional[str],
+    aws_session_create_params: dict[str, Any],
     stagehand_instance: Any,
     logger: StagehandLogger,
 ) -> tuple[Browser, BrowserContext, StagehandContext, StagehandPage, AWSBrowserClientProtocol]:
@@ -337,6 +361,7 @@ async def connect_aws_agentcore_browser(
         aws_region: AWS region (e.g., 'us-west-2')
         aws_profile: AWS profile name for credentials
         aws_session_id: Session ID for resuming existing sessions
+        aws_session_create_params: Session create parameters (identifier, name, session_timeout_seconds, viewport)
         stagehand_instance: Stagehand instance for context initialization
         logger: Logger instance
 
@@ -356,7 +381,7 @@ async def connect_aws_agentcore_browser(
 
     try:
         browser_client = _create_aws_browser_client(
-            region, aws_profile, aws_session_id, stagehand_instance, logger
+            region, aws_profile, aws_session_id, aws_session_create_params, stagehand_instance, logger
         )
 
         browser = await _connect_aws_cdp(playwright, browser_client, logger)

@@ -220,6 +220,7 @@ class Stagehand:
         self.aws_region = self.config.aws_region or os.getenv("AWS_REGION")
         self.aws_profile = self.config.aws_profile or os.getenv("AWS_PROFILE")
         self.aws_session_id = self.config.aws_session_id
+        self.aws_session_create_params = self.config.aws_session_create_params or {}
 
         # Validate env
         if self.env not in ["BROWSERBASE", "LOCAL", "AWS"]:
@@ -550,6 +551,7 @@ class Stagehand:
                     self.aws_region,
                     self.aws_profile,
                     self.aws_session_id,
+                    self.aws_session_create_params,
                     self,
                     self.logger,
                 )
