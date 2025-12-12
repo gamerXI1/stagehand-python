@@ -100,6 +100,63 @@ source .venv/bin/activate
 uv pip install stagehand
 ```
 
+### AWS AgentCore Browser Support
+
+To use AWS AgentCore Browser, install with AWS support:
+
+```bash
+pip install stagehand[aws]
+```
+
+This installs the `bedrock-agentcore` package required for AWS integration.
+
+## Environment Options
+
+Stagehand supports three browser environments:
+
+### 1. BROWSERBASE (Remote Browser via Browserbase)
+
+Uses [Browserbase](https://browserbase.com) for remote browser automation with built-in debugging and session replay.
+
+```python
+config = StagehandConfig(
+    env="BROWSERBASE",
+    api_key=os.getenv("BROWSERBASE_API_KEY"),
+    project_id=os.getenv("BROWSERBASE_PROJECT_ID"),
+    model_api_key=os.getenv("MODEL_API_KEY"),
+)
+```
+
+### 2. AWS (Remote Browser via AWS AgentCore Browser)
+
+Uses [AWS AgentCore Browser](https://aws.amazon.com/bedrock/agentcore/) for managed, secure browser automation in AWS cloud.
+
+```python
+config = StagehandConfig(
+    env="AWS",
+    aws_region="us-west-2",  # or AWS_REGION environment variable
+    aws_profile="default",   # optional: AWS profile name
+    model_api_key=os.getenv("MODEL_API_KEY"),
+)
+```
+
+**Prerequisites for AWS:**
+- AWS credentials configured (via AWS CLI, environment variables, or IAM role)
+- `bedrock-agentcore` package installed: `pip install stagehand[aws]`
+- Appropriate IAM permissions for AgentCore Browser
+- Available regions: us-east-1, us-west-2, ap-southeast-2, eu-central-1
+
+### 3. LOCAL (Local Browser)
+
+Runs a local browser instance on your machine.
+
+```python
+config = StagehandConfig(
+    env="LOCAL",
+    model_api_key=os.getenv("MODEL_API_KEY"),
+)
+```
+
 ## Quickstart
 
 ```python
@@ -124,7 +181,7 @@ class Companies(BaseModel):
 async def main():
     # Create configuration
     config = StagehandConfig(
-        env = "BROWSERBASE", # or LOCAL
+        env = "BROWSERBASE", # or "LOCAL" or "AWS"
         api_key=os.getenv("BROWSERBASE_API_KEY"),
         project_id=os.getenv("BROWSERBASE_PROJECT_ID"),
         model_name="google/gemini-2.5-flash-preview-05-20",

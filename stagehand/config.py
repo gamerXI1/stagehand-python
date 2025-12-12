@@ -11,12 +11,16 @@ class StagehandConfig(BaseModel):
     Configuration for the Stagehand client.
 
     Attributes:
-        env (str): Environment type. 'BROWSERBASE' for remote usage
+        env (str): Environment type. 'BROWSERBASE' for remote usage via Browserbase,
+                   'LOCAL' for local browser, 'AWS' for AWS AgentCore Browser.
         api_key (Optional[str]): BrowserbaseAPI key for authentication.
         project_id (Optional[str]): Browserbase Project identifier.
         api_url (Optional[str]): Stagehand API URL.
         browserbase_session_create_params (Optional[BrowserbaseSessionCreateParams]): Browserbase session create params.
         browserbase_session_id (Optional[str]): Session ID for resuming Browserbase sessions.
+        aws_region (Optional[str]): AWS region for AgentCore Browser (e.g., 'us-west-2').
+        aws_profile (Optional[str]): AWS profile name for credentials.
+        aws_session_id (Optional[str]): Session ID for resuming AWS AgentCore Browser sessions.
         model_name (Optional[str]): Name of the model to use.
         model_api_key (Optional[str]): Model API key.
         model_client_options (Optional[dict[str, Any]]): Options for the model client.
@@ -35,7 +39,7 @@ class StagehandConfig(BaseModel):
         experimental (bool): Enable experimental features.
     """
 
-    env: Literal["BROWSERBASE", "LOCAL"] = "BROWSERBASE"
+    env: Literal["BROWSERBASE", "LOCAL", "AWS"] = "BROWSERBASE"
     api_key: Optional[str] = Field(
         None, alias="apiKey", description="Browserbase API key for authentication"
     )
@@ -83,6 +87,21 @@ class StagehandConfig(BaseModel):
         None,
         alias="browserbaseSessionID",
         description="Session ID for resuming Browserbase sessions",
+    )
+    aws_region: Optional[str] = Field(
+        None,
+        alias="awsRegion",
+        description="AWS region for AgentCore Browser (e.g., 'us-west-2')",
+    )
+    aws_profile: Optional[str] = Field(
+        None,
+        alias="awsProfile",
+        description="AWS profile name for credentials",
+    )
+    aws_session_id: Optional[str] = Field(
+        None,
+        alias="awsSessionID",
+        description="Session ID for resuming AWS AgentCore Browser sessions",
     )
     model_name: Optional[str] = Field(
         AvailableModel.GPT_4_1_MINI,

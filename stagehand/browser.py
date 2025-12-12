@@ -17,6 +17,14 @@ from .context import StagehandContext
 from .logging import StagehandLogger
 from .page import StagehandPage
 
+# AWS AgentCore Browser support - import conditionally
+try:
+    from bedrock_agentcore.tools.browser_client import BrowserClient
+    AWS_AGENTCORE_AVAILABLE = True
+except ImportError:
+    AWS_AGENTCORE_AVAILABLE = False
+    BrowserClient = None
+
 
 async def connect_browserbase_browser(
     playwright: Playwright,
@@ -101,6 +109,113 @@ async def connect_browserbase_browser(
         page = await stagehand_context.new_page()
 
     return browser, context, stagehand_context, page
+
+
+async def connect_aws_agentcore_browser(
+    playwright: Playwright,
+    aws_region: str,
+    aws_profile: Optional[str],
+    aws_session_id: Optional[str],
+    stagehand_instance: Any,
+    logger: StagehandLogger,
+) -> tuple[Browser, BrowserContext, StagehandContext, StagehandPage, Any]:
+    """
+    Connect to an AWS AgentCore Browser session.
+
+    Args:
+        playwright: The Playwright instance
+        aws_region: AWS region for AgentCore Browser (e.g., 'us-west-2')
+        aws_profile: Optional AWS profile name for credentials
+        aws_session_id: Optional session ID for resuming existing sessions
+        stagehand_instance: The Stagehand instance (for context initialization)
+        logger: The logger instance
+
+    Returns:
+        tuple of (browser, context, stagehand_context, page, browser_client)
+    """
+    if not AWS_AGENTCORE_AVAILABLE:
+        raise RuntimeError(
+            "AWS AgentCore Browser support requires the 'bedrock-agentcore' package. "
+            "Install it with: pip install bedrock-agentcore"
+        )
+
+    # Validate region
+    if not aws_region:
+        raise ValueError(
+            "aws_region is required for AWS environment. "
+            "Set it via config.aws_region or AWS_REGION environment variable."
+        )
+
+    logger.info(f"Connecting to AWS AgentCore Browser in region: {aws_region}")
+
+    # Create browser client with optional profile
+    try:
+        # Set up AWS profile if provided
+        if aws_profile:
+            os.environ['AWS_PROFILE'] = aws_profile
+            logger.debug(f"Using AWS profile: {aws_profile}")
+
+        # Create or resume browser session
+        browser_client = BrowserClient(region=aws_region)
+
+        # Start a new session or use existing one
+        if aws_session_id:
+            logger.info(f"Resuming AWS AgentCore Browser session: {aws_session_id}")
+            browser_client.session_id = aws_session_id
+            # Note: BrowserClient may need additional methods to validate/resume sessions
+            # For now, we'll assume session_id can be set directly
+        else:
+            logger.info("Starting new AWS AgentCore Browser session...")
+            browser_client.start()
+            logger.info(f"AWS session created with ID: {browser_client.session_id}")
+            # Store session ID in stagehand instance
+            stagehand_instance.aws_session_id = browser_client.session_id
+
+        # Generate WebSocket URL and authentication headers
+        ws_url, headers = browser_client.generate_ws_headers()
+        logger.debug(f"Generated WebSocket URL for CDP connection")
+
+    except Exception as e:
+        logger.error(f"Error creating AWS AgentCore Browser session: {str(e)}")
+        raise
+
+    # Connect to remote browser via CDP
+    logger.debug(f"Connecting to AWS AgentCore Browser via CDP...")
+    try:
+        browser = await playwright.chromium.connect_over_cdp(ws_url, headers=headers)
+    except Exception as e:
+        logger.error(f"Failed to connect Playwright via CDP to AWS: {str(e)}")
+        # Clean up browser client on failure
+        try:
+            browser_client.stop()
+        except Exception:
+            pass
+        raise
+
+    # Get existing context (AWS AgentCore Browser creates a default context)
+    existing_contexts = browser.contexts
+    logger.debug(f"Existing contexts in AWS browser: {len(existing_contexts)}")
+    if existing_contexts:
+        context = existing_contexts[0]
+    else:
+        logger.warning(
+            "No existing context found in AWS browser, creating a new one."
+        )
+        context = await browser.new_context()
+
+    stagehand_context = await StagehandContext.init(context, stagehand_instance)
+
+    # Access or create a page via StagehandContext
+    existing_pages = context.pages
+    logger.debug(f"Existing pages in AWS context: {len(existing_pages)}")
+    if existing_pages:
+        logger.debug("Using existing page via StagehandContext")
+        page = await stagehand_context.get_stagehand_page(existing_pages[0])
+    else:
+        logger.debug("Creating a new page via StagehandContext")
+        page = await stagehand_context.new_page()
+
+    return browser, context, stagehand_context, page, browser_client
 
 
 async def connect_local_browser(
@@ -311,6 +426,7 @@ async def cleanup_browser_resources(
     playwright: Optional[Playwright],
     temp_user_data_dir: Optional[Path],
     logger: StagehandLogger,
+    aws_browser_client: Optional[Any] = None,
 ):
     """
     Clean up browser resources.
@@ -321,7 +437,17 @@ async def cleanup_browser_resources(
         playwright: The Playwright instance
         temp_user_data_dir: Temporary user data directory to remove (if any)
         logger: The logger instance
+        aws_browser_client: AWS AgentCore BrowserClient instance (if any)
     """
+    # Clean up AWS browser client first if it exists
+    if aws_browser_client:
+        try:
+            logger.debug("Stopping AWS AgentCore Browser session...")
+            aws_browser_client.stop()
+            logger.debug("AWS AgentCore Browser session stopped successfully")
+        except Exception as e:
+            logger.error(f"Error stopping AWS browser client: {str(e)}")
+
     if context:
         try:
             logger.debug("Closing browser context...")
