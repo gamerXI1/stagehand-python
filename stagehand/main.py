@@ -626,10 +626,16 @@ class Stagehand:
         """
         Clean up resources.
         For BROWSERBASE: Ends the session on the server and stops Playwright.
+        For AWS: Stops the AWS browser session and closes Playwright.
         For LOCAL: Closes the local context, stops Playwright, and removes temporary directories.
+
+        This method is idempotent - calling it multiple times is safe.
         """
         if self._closed:
             return
+
+        # Set closed flag immediately to prevent re-entry
+        self._closed = True
 
         self.logger.debug("Closing resources...")
 
@@ -671,8 +677,6 @@ class Stagehand:
             self.logger,
             self._aws_browser_client,
         )
-
-        self._closed = True
 
     async def _handle_log(self, msg: dict[str, Any]):
         """
@@ -781,6 +785,20 @@ class Stagehand:
             stagehand_page: The StagehandPage to set as active
         """
         self._page = stagehand_page
+
+    @property
+    def current_session_id(self) -> Optional[str]:
+        """
+        Get the session ID for the current environment.
+
+        Returns:
+            str: The session ID for BROWSERBASE or AWS, None for LOCAL environment
+        """
+        if self.env == "BROWSERBASE":
+            return self.session_id
+        elif self.env == "AWS":
+            return self.aws_session_id
+        return None
 
     @property
     def page(self) -> Optional[StagehandPage]:

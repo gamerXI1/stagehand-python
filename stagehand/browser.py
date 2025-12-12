@@ -125,97 +125,167 @@ async def connect_aws_agentcore_browser(
     Args:
         playwright: The Playwright instance
         aws_region: AWS region for AgentCore Browser (e.g., 'us-west-2')
-        aws_profile: Optional AWS profile name for credentials
-        aws_session_id: Optional session ID for resuming existing sessions
+        aws_profile: Optional AWS profile name for credentials (uses boto3 default credential chain)
+        aws_session_id: Optional session ID for resuming existing sessions (EXPERIMENTAL - not yet tested)
         stagehand_instance: The Stagehand instance (for context initialization)
         logger: The logger instance
 
     Returns:
         tuple of (browser, context, stagehand_context, page, browser_client)
+
+    Raises:
+        RuntimeError: If bedrock-agentcore package is not installed
+        ValueError: If aws_region is invalid or missing
+        asyncio.TimeoutError: If CDP connection times out
     """
+    import asyncio
+    import re
+
     if not AWS_AGENTCORE_AVAILABLE:
         raise RuntimeError(
             "AWS AgentCore Browser support requires the 'bedrock-agentcore' package. "
-            "Install it with: pip install bedrock-agentcore"
+            "Install it with: pip install stagehand[aws]"
         )
 
-    # Validate region
-    if not aws_region:
+    # Validate region format and presence
+    if not aws_region or not aws_region.strip():
         raise ValueError(
             "aws_region is required for AWS environment. "
             "Set it via config.aws_region or AWS_REGION environment variable."
         )
 
+    # Validate AWS region format (e.g., us-west-2, eu-central-1)
+    if not re.match(r'^[a-z]{2}-[a-z]+-\d+$', aws_region.strip()):
+        raise ValueError(
+            f"Invalid AWS region format: '{aws_region}'. "
+            "Expected format: 'us-west-2', 'eu-central-1', etc."
+        )
+
     logger.info(f"Connecting to AWS AgentCore Browser in region: {aws_region}")
 
-    # Create browser client with optional profile
-    try:
-        # Set up AWS profile if provided
-        if aws_profile:
-            os.environ['AWS_PROFILE'] = aws_profile
-            logger.debug(f"Using AWS profile: {aws_profile}")
+    # Initialize cleanup tracking
+    browser_client = None
+    browser = None
+    context = None
 
-        # Create or resume browser session
+    try:
+        # Note: AWS credentials are handled by boto3's default credential chain
+        # which checks (in order): environment variables, AWS config files, IAM roles, etc.
+        # If aws_profile is provided, boto3 will use it automatically via AWS_PROFILE env var
+        # or ~/.aws/credentials. We don't set os.environ to avoid global state mutation.
+        if aws_profile:
+            logger.debug(f"Using AWS profile: {aws_profile} (via boto3 credential chain)")
+            logger.warning(
+                "AWS profile support depends on your boto3 configuration. "
+                "Ensure ~/.aws/credentials or environment variables are properly set."
+            )
+
+        # Create browser session client
         browser_client = BrowserClient(region=aws_region)
 
-        # Start a new session or use existing one
+        # Handle session creation or resumption
         if aws_session_id:
-            logger.info(f"Resuming AWS AgentCore Browser session: {aws_session_id}")
+            logger.warning(
+                "AWS session resume is EXPERIMENTAL and not fully tested. "
+                "If connection fails, remove aws_session_id to create a new session."
+            )
+            logger.info(f"Attempting to resume AWS AgentCore Browser session: {aws_session_id}")
             browser_client.session_id = aws_session_id
-            # Note: BrowserClient may need additional methods to validate/resume sessions
-            # For now, we'll assume session_id can be set directly
+            # TODO: Add session validation when BrowserClient API supports it
+            # Currently we assume session_id assignment works, but this may fail during CDP connection
         else:
             logger.info("Starting new AWS AgentCore Browser session...")
             browser_client.start()
             logger.info(f"AWS session created with ID: {browser_client.session_id}")
-            # Store session ID in stagehand instance
             stagehand_instance.aws_session_id = browser_client.session_id
 
         # Generate WebSocket URL and authentication headers
+        # Note: Despite the method name, this returns (websocket_url, auth_headers) tuple
         ws_url, headers = browser_client.generate_ws_headers()
-        logger.debug(f"Generated WebSocket URL for CDP connection")
+        logger.debug("Generated WebSocket URL and authentication headers for CDP connection")
 
-    except Exception as e:
-        logger.error(f"Error creating AWS AgentCore Browser session: {str(e)}")
-        raise
+        # Validate WebSocket URL
+        if not ws_url or not isinstance(ws_url, str):
+            raise RuntimeError(
+                f"BrowserClient.generate_ws_headers() returned invalid WebSocket URL: {ws_url}"
+            )
+        if not ws_url.startswith(('ws://', 'wss://')):
+            raise RuntimeError(
+                f"Invalid WebSocket URL format (expected ws:// or wss://): {ws_url}"
+            )
 
-    # Connect to remote browser via CDP
-    logger.debug(f"Connecting to AWS AgentCore Browser via CDP...")
-    try:
-        browser = await playwright.chromium.connect_over_cdp(ws_url, headers=headers)
-    except Exception as e:
-        logger.error(f"Failed to connect Playwright via CDP to AWS: {str(e)}")
-        # Clean up browser client on failure
+        # Connect to remote browser via CDP with timeout
+        logger.debug("Connecting to AWS AgentCore Browser via CDP...")
         try:
-            browser_client.stop()
-        except Exception:
-            pass
+            browser = await asyncio.wait_for(
+                playwright.chromium.connect_over_cdp(ws_url, headers=headers),
+                timeout=30.0  # 30 second timeout to match Playwright init timeout
+            )
+        except asyncio.TimeoutError:
+            logger.error("Timeout connecting to AWS AgentCore Browser (30s)")
+            raise RuntimeError(
+                "AWS AgentCore Browser connection timeout after 30 seconds. "
+                "Check your network connection and AWS region availability."
+            )
+
+        # Get existing context (AWS AgentCore Browser creates a default context)
+        existing_contexts = browser.contexts
+        logger.debug(f"Existing contexts in AWS browser: {len(existing_contexts)}")
+        if existing_contexts:
+            context = existing_contexts[0]
+        else:
+            logger.warning(
+                "No existing context found in AWS browser, creating a new one."
+            )
+            context = await browser.new_context()
+
+        # Initialize Stagehand context wrapper
+        stagehand_context = await StagehandContext.init(context, stagehand_instance)
+
+        # Access or create a page via StagehandContext
+        existing_pages = context.pages
+        logger.debug(f"Existing pages in AWS context: {len(existing_pages)}")
+        if existing_pages:
+            logger.debug("Using existing page via StagehandContext")
+            page = await stagehand_context.get_stagehand_page(existing_pages[0])
+        else:
+            logger.debug("Creating a new page via StagehandContext")
+            page = await stagehand_context.new_page()
+
+        return browser, context, stagehand_context, page, browser_client
+
+    except Exception as e:
+        # Comprehensive cleanup on any failure
+        logger.error(f"Failed to connect to AWS AgentCore Browser: {str(e)}")
+
+        # Clean up in reverse order of creation
+        if context:
+            try:
+                logger.debug("Cleaning up browser context after failure...")
+                await context.close()
+            except Exception as cleanup_error:
+                logger.warning(f"Failed to close context during cleanup: {cleanup_error}")
+
+        if browser:
+            try:
+                logger.debug("Cleaning up browser connection after failure...")
+                await browser.close()
+            except Exception as cleanup_error:
+                logger.warning(f"Failed to close browser during cleanup: {cleanup_error}")
+
+        if browser_client:
+            try:
+                logger.debug("Stopping AWS browser session after failure...")
+                browser_client.stop()
+                logger.debug("AWS browser session stopped")
+            except Exception as cleanup_error:
+                logger.error(
+                    f"Failed to stop AWS browser client during cleanup: {cleanup_error}. "
+                    f"AWS session may still be running. Check AWS console for session: {browser_client.session_id if hasattr(browser_client, 'session_id') else 'unknown'}"
+                )
+
+        # Re-raise the original exception
         raise
-
-    # Get existing context (AWS AgentCore Browser creates a default context)
-    existing_contexts = browser.contexts
-    logger.debug(f"Existing contexts in AWS browser: {len(existing_contexts)}")
-    if existing_contexts:
-        context = existing_contexts[0]
-    else:
-        logger.warning(
-            "No existing context found in AWS browser, creating a new one."
-        )
-        context = await browser.new_context()
-
-    stagehand_context = await StagehandContext.init(context, stagehand_instance)
-
-    # Access or create a page via StagehandContext
-    existing_pages = context.pages
-    logger.debug(f"Existing pages in AWS context: {len(existing_pages)}")
-    if existing_pages:
-        logger.debug("Using existing page via StagehandContext")
-        page = await stagehand_context.get_stagehand_page(existing_pages[0])
-    else:
-        logger.debug("Creating a new page via StagehandContext")
-        page = await stagehand_context.new_page()
-
-    return browser, context, stagehand_context, page, browser_client
 
 
 async def connect_local_browser(
