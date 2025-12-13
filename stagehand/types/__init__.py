@@ -15,9 +15,30 @@ from .a11y import (
 )
 from .agent import (
     AgentConfig,
+    DoubleTapAction,
+    LongPressAction,
+    MobileActionType,
+    MultiTouchAction,
+    PinchAction,
+    RotateAction,
+    SwipeAction,
+    TapAction,
 )
 from .llm import (
     ChatMessage,
+)
+from .mobile import (
+    AndroidCapabilities,
+    AppiumCapabilities,
+    create_android_capabilities,
+    create_ios_capabilities,
+    DEVICE_PROFILES,
+    get_device_profile,
+    IOSCapabilities,
+    MobileAgentConfig,
+    MobileDeviceProfile,
+    MobilePlatform,
+    MobileSessionConfig,
 )
 from .page import (
     ActOptions,
@@ -58,4 +79,24 @@ __all__ = [
     "AgentExecuteOptions",
     "AgentResult",
     "EmptyExtractSchema",
+    # Mobile types
+    "TapAction",
+    "DoubleTapAction",
+    "LongPressAction",
+    "SwipeAction",
+    "PinchAction",
+    "RotateAction",
+    "MultiTouchAction",
+    "MobileActionType",
+    "MobilePlatform",
+    "MobileDeviceProfile",
+    "DEVICE_PROFILES",
+    "AppiumCapabilities",
+    "IOSCapabilities",
+    "AndroidCapabilities",
+    "MobileSessionConfig",
+    "MobileAgentConfig",
+    "get_device_profile",
+    "create_ios_capabilities",
+    "create_android_capabilities",
 ]
