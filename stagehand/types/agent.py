@@ -96,6 +96,84 @@ class KeyAction(BaseModel):  # From Anthropic
     text: str
 
 
+# Mobile-specific action types
+class TapAction(BaseModel):
+    """Single tap action for mobile touch interactions."""
+
+    type: Literal["tap"]
+    x: int
+    y: int
+    duration_ms: Optional[int] = None  # Optional hold duration before release
+
+
+class DoubleTapAction(BaseModel):
+    """Double tap action for mobile touch interactions."""
+
+    type: Literal["double_tap"]
+    x: int
+    y: int
+
+
+class LongPressAction(BaseModel):
+    """Long press action for mobile context menus and drag operations."""
+
+    type: Literal["long_press"]
+    x: int
+    y: int
+    duration_ms: int = 500  # Default 500ms for long press
+
+
+class SwipeAction(BaseModel):
+    """Swipe gesture for mobile scrolling and navigation."""
+
+    type: Literal["swipe"]
+    start_x: int
+    start_y: int
+    end_x: int
+    end_y: int
+    duration_ms: int = 300  # Duration of the swipe gesture
+
+
+class PinchAction(BaseModel):
+    """Pinch gesture for zoom in/out on mobile."""
+
+    type: Literal["pinch"]
+    center_x: int
+    center_y: int
+    scale: float  # < 1.0 for pinch in (zoom out), > 1.0 for pinch out (zoom in)
+    duration_ms: int = 300
+
+
+class RotateAction(BaseModel):
+    """Rotate gesture for mobile rotation interactions."""
+
+    type: Literal["rotate"]
+    center_x: int
+    center_y: int
+    angle: float  # Rotation angle in degrees (positive = clockwise)
+    duration_ms: int = 300
+
+
+class MultiTouchAction(BaseModel):
+    """Multi-touch action supporting multiple simultaneous touch points."""
+
+    type: Literal["multi_touch"]
+    touches: list[Point]  # List of touch points
+    action: Literal["down", "up", "move"]
+
+
+# Union of all mobile action types
+MobileActionType = Union[
+    TapAction,
+    DoubleTapAction,
+    LongPressAction,
+    SwipeAction,
+    PinchAction,
+    RotateAction,
+    MultiTouchAction,
+]
+
+
 AgentActionType = Union[
     ClickAction,
     DoubleClickAction,
@@ -108,6 +186,14 @@ AgentActionType = Union[
     ScreenshotAction,
     FunctionAction,
     KeyAction,
+    # Mobile actions
+    TapAction,
+    DoubleTapAction,
+    LongPressAction,
+    SwipeAction,
+    PinchAction,
+    RotateAction,
+    MultiTouchAction,
 ]
 
 
