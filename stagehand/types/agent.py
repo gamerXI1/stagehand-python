@@ -81,8 +81,8 @@ class ScreenshotAction(BaseModel):
 
 
 class FunctionArguments(BaseModel):
-    url: str
-    # Add other function arguments as needed
+    url: Optional[str] = None
+    app_id: Optional[str] = None  # For mobile app launch
 
 
 class FunctionAction(BaseModel):

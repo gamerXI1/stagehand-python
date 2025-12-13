@@ -352,7 +352,7 @@ class MobileNavigationHandler:
         """
         center_x, center_y = self.normalize_coordinates(action.center_x, action.center_y)
         scale = action.scale
-        duration_s = action.duration_ms / 1000
+        duration_ms = action.duration_ms
 
         # Calculate finger positions
         # For pinch in (scale < 1): fingers start apart, move together
@@ -365,66 +365,53 @@ class MobileNavigationHandler:
             end_distance = int(base_distance * scale)
         else:
             # Pinch out: start close, end far
-            start_distance = base_distance
-            end_distance = int(base_distance * scale)
+            start_distance = int(base_distance / scale)
+            end_distance = base_distance
 
         self._log(
             "debug",
-            f"Pinch at ({center_x}, {center_y}) scale={scale} duration={action.duration_ms}ms",
+            f"Pinch at ({center_x}, {center_y}) scale={scale} duration={duration_ms}ms",
         )
 
         driver = self.appium_client._ensure_connected()
 
-        # Create two touch inputs for multi-touch
-        touch1 = PointerInput(interaction.POINTER_TOUCH, "finger1")
-        touch2 = PointerInput(interaction.POINTER_TOUCH, "finger2")
+        # Create two separate touch inputs for multi-touch
+        finger1 = PointerInput(interaction.POINTER_TOUCH, "finger1")
+        finger2 = PointerInput(interaction.POINTER_TOUCH, "finger2")
 
+        # Calculate start and end positions for both fingers (horizontal pinch)
+        f1_start_x = center_x - start_distance
+        f1_end_x = center_x - end_distance
+        f2_start_x = center_x + start_distance
+        f2_end_x = center_x + end_distance
+
+        # Build finger 1 action sequence
+        finger1_actions = finger1.create_pointer_move(
+            duration=0, x=f1_start_x, y=center_y, origin="viewport"
+        )
+        finger1.create_pointer_down(button=0)
+        finger1.create_pointer_move(
+            duration=duration_ms, x=f1_end_x, y=center_y, origin="viewport"
+        )
+        finger1.create_pointer_up(button=0)
+
+        # Build finger 2 action sequence
+        finger2.create_pointer_move(
+            duration=0, x=f2_start_x, y=center_y, origin="viewport"
+        )
+        finger2.create_pointer_down(button=0)
+        finger2.create_pointer_move(
+            duration=duration_ms, x=f2_end_x, y=center_y, origin="viewport"
+        )
+        finger2.create_pointer_up(button=0)
+
+        # Execute multi-touch action
         actions = ActionBuilder(driver)
-        actions.add_pointer_input(touch1.kind, "finger1")
-        actions.add_pointer_input(touch2.kind, "finger2")
+        actions.add_action(finger1)
+        actions.add_action(finger2)
 
-        # Calculate start and end positions for both fingers
-        if scale < 1.0:
-            # Pinch in
-            f1_start = (center_x - start_distance, center_y)
-            f1_end = (center_x - end_distance, center_y)
-            f2_start = (center_x + start_distance, center_y)
-            f2_end = (center_x + end_distance, center_y)
-        else:
-            # Pinch out
-            f1_start = (center_x - int(base_distance / scale), center_y)
-            f1_end = (center_x - end_distance, center_y)
-            f2_start = (center_x + int(base_distance / scale), center_y)
-            f2_end = (center_x + end_distance, center_y)
-
-        # Build synchronized two-finger gesture
-        steps = max(int(duration_s * 30), 5)
-
-        # Finger 1 actions
-        finger1_actions = actions.pointer_inputs[0]
-        finger1_actions.create_pointer_move(x=f1_start[0], y=f1_start[1])
-        finger1_actions.create_pointer_down()
-        for i in range(1, steps + 1):
-            progress = i / steps
-            x = int(f1_start[0] + (f1_end[0] - f1_start[0]) * progress)
-            y = int(f1_start[1] + (f1_end[1] - f1_start[1]) * progress)
-            finger1_actions.create_pointer_move(x=x, y=y)
-            finger1_actions.create_pause(duration_s / steps)
-        finger1_actions.create_pointer_up()
-
-        # Finger 2 actions
-        finger2_actions = actions.pointer_inputs[1]
-        finger2_actions.create_pointer_move(x=f2_start[0], y=f2_start[1])
-        finger2_actions.create_pointer_down()
-        for i in range(1, steps + 1):
-            progress = i / steps
-            x = int(f2_start[0] + (f2_end[0] - f2_start[0]) * progress)
-            y = int(f2_start[1] + (f2_end[1] - f2_start[1]) * progress)
-            finger2_actions.create_pointer_move(x=x, y=y)
-            finger2_actions.create_pause(duration_s / steps)
-        finger2_actions.create_pointer_up()
-
-        await self.appium_client.execute_touch_action(actions)
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, actions.perform)
         return ActionExecutionResult(success=True, error=None)
 
     async def _perform_rotate(self, action: RotateAction) -> ActionExecutionResult:
@@ -438,63 +425,63 @@ class MobileNavigationHandler:
         """
         center_x, center_y = self.normalize_coordinates(action.center_x, action.center_y)
         angle_rad = math.radians(action.angle)
-        duration_s = action.duration_ms / 1000
+        duration_ms = action.duration_ms
         radius = 80  # Fixed radius for rotation
 
         self._log(
             "debug",
-            f"Rotate at ({center_x}, {center_y}) angle={action.angle}° duration={action.duration_ms}ms",
+            f"Rotate at ({center_x}, {center_y}) angle={action.angle}° duration={duration_ms}ms",
         )
 
         driver = self.appium_client._ensure_connected()
 
-        # Create two touch inputs
-        touch1 = PointerInput(interaction.POINTER_TOUCH, "finger1")
-        touch2 = PointerInput(interaction.POINTER_TOUCH, "finger2")
-
-        actions = ActionBuilder(driver)
-        actions.add_pointer_input(touch1.kind, "finger1")
-        actions.add_pointer_input(touch2.kind, "finger2")
+        # Create two touch inputs for rotation
+        finger1 = PointerInput(interaction.POINTER_TOUCH, "finger1")
+        finger2 = PointerInput(interaction.POINTER_TOUCH, "finger2")
 
         # Starting positions: opposite sides of center
         f1_start_angle = 0
         f2_start_angle = math.pi  # 180 degrees opposite
 
-        steps = max(int(duration_s * 30), 5)
+        # Calculate start positions
+        f1_start_x = int(center_x + radius * math.cos(f1_start_angle))
+        f1_start_y = int(center_y + radius * math.sin(f1_start_angle))
+        f2_start_x = int(center_x + radius * math.cos(f2_start_angle))
+        f2_start_y = int(center_y + radius * math.sin(f2_start_angle))
 
-        # Finger 1: rotate clockwise/counter-clockwise
-        finger1_actions = actions.pointer_inputs[0]
-        f1_x = int(center_x + radius * math.cos(f1_start_angle))
-        f1_y = int(center_y + radius * math.sin(f1_start_angle))
-        finger1_actions.create_pointer_move(x=f1_x, y=f1_y)
-        finger1_actions.create_pointer_down()
+        # Calculate end positions
+        f1_end_x = int(center_x + radius * math.cos(f1_start_angle + angle_rad))
+        f1_end_y = int(center_y + radius * math.sin(f1_start_angle + angle_rad))
+        f2_end_x = int(center_x + radius * math.cos(f2_start_angle + angle_rad))
+        f2_end_y = int(center_y + radius * math.sin(f2_start_angle + angle_rad))
 
-        for i in range(1, steps + 1):
-            progress = i / steps
-            current_angle = f1_start_angle + (angle_rad * progress)
-            x = int(center_x + radius * math.cos(current_angle))
-            y = int(center_y + radius * math.sin(current_angle))
-            finger1_actions.create_pointer_move(x=x, y=y)
-            finger1_actions.create_pause(duration_s / steps)
-        finger1_actions.create_pointer_up()
+        # Build finger 1 action sequence
+        finger1.create_pointer_move(
+            duration=0, x=f1_start_x, y=f1_start_y, origin="viewport"
+        )
+        finger1.create_pointer_down(button=0)
+        finger1.create_pointer_move(
+            duration=duration_ms, x=f1_end_x, y=f1_end_y, origin="viewport"
+        )
+        finger1.create_pointer_up(button=0)
 
-        # Finger 2: opposite rotation
-        finger2_actions = actions.pointer_inputs[1]
-        f2_x = int(center_x + radius * math.cos(f2_start_angle))
-        f2_y = int(center_y + radius * math.sin(f2_start_angle))
-        finger2_actions.create_pointer_move(x=f2_x, y=f2_y)
-        finger2_actions.create_pointer_down()
+        # Build finger 2 action sequence
+        finger2.create_pointer_move(
+            duration=0, x=f2_start_x, y=f2_start_y, origin="viewport"
+        )
+        finger2.create_pointer_down(button=0)
+        finger2.create_pointer_move(
+            duration=duration_ms, x=f2_end_x, y=f2_end_y, origin="viewport"
+        )
+        finger2.create_pointer_up(button=0)
 
-        for i in range(1, steps + 1):
-            progress = i / steps
-            current_angle = f2_start_angle + (angle_rad * progress)
-            x = int(center_x + radius * math.cos(current_angle))
-            y = int(center_y + radius * math.sin(current_angle))
-            finger2_actions.create_pointer_move(x=x, y=y)
-            finger2_actions.create_pause(duration_s / steps)
-        finger2_actions.create_pointer_up()
+        # Execute multi-touch action
+        actions = ActionBuilder(driver)
+        actions.add_action(finger1)
+        actions.add_action(finger2)
 
-        await self.appium_client.execute_touch_action(actions)
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, actions.perform)
         return ActionExecutionResult(success=True, error=None)
 
     async def _perform_type(self, action: TypeAction) -> ActionExecutionResult:
@@ -620,9 +607,12 @@ class MobileNavigationHandler:
             return ActionExecutionResult(success=True, error=None)
 
         elif name == "open_app":
-            if args and hasattr(args, "app_id"):
-                await self.appium_client.launch_app(args.app_id)
-                return ActionExecutionResult(success=True, error=None)
+            if args:
+                # Check for app_id first, then fallback to url (for backwards compatibility)
+                app_id = getattr(args, "app_id", None) or getattr(args, "url", None)
+                if app_id:
+                    await self.appium_client.launch_app(app_id)
+                    return ActionExecutionResult(success=True, error=None)
             return ActionExecutionResult(success=False, error="Missing app_id for open_app")
 
         elif name == "hide_keyboard":

@@ -507,7 +507,7 @@ For text input, tap the field first, then use type_text_at.
             action_payload = {
                 "type": "function",
                 "name": "open_app",
-                "arguments": {"url": args["app_name"]},  # Using url field for app_id
+                "arguments": {"app_id": args["app_name"]},
             }
 
         elif name == "open_url":
