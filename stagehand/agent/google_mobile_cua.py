@@ -2,7 +2,8 @@
 
 import asyncio
 import os
-from typing import Any, Optional
+import time
+from typing import Any, Callable, Optional
 
 from dotenv import load_dotenv
 from google import genai
@@ -29,8 +30,13 @@ from ..types.agent import (
     AgentExecuteOptions,
     AgentResult,
 )
-
-load_dotenv()
+from ..types.mobile import (
+    COORDINATE_GRID_SIZE,
+    DEFAULT_LONG_PRESS_DURATION_MS,
+    DEFAULT_SWIPE_DURATION_MS,
+    DEFAULT_PINCH_DURATION_MS,
+    MAX_HISTORY_LENGTH,
+)
 
 
 class GoogleMobileCUAClient:
@@ -39,9 +45,6 @@ class GoogleMobileCUAClient:
     Uses Gemini's computer-use model with mobile-optimized configuration.
     Translates Google CUA actions to mobile touch gestures via MobileNavigationHandler.
     """
-
-    # Google CUA uses 1000x1000 normalized coordinate grid
-    COORDINATE_GRID_SIZE = 1000
 
     def __init__(
         self,
@@ -65,6 +68,9 @@ class GoogleMobileCUAClient:
             viewport_width: Device viewport width in pixels
             viewport_height: Device viewport height in pixels
         """
+        # Load environment variables
+        load_dotenv()
+
         self.model = model
         self.instructions = instructions or self._default_mobile_instructions()
         self.config = config or AgentConfig()
@@ -87,6 +93,22 @@ class GoogleMobileCUAClient:
         self.genai_client = genai.Client(api_key=api_key)
         self._generate_content_config = self._build_config()
         self.history: list[Content] = []
+
+        # Action mapping dispatch table - maps function names to mapping functions
+        self._action_mappers: dict[str, Callable[[dict[str, Any]], tuple[str, dict[str, Any]]]] = {
+            "tap_at": self._map_tap,
+            "double_tap_at": self._map_double_tap,
+            "long_press_at": self._map_long_press,
+            "swipe": self._map_swipe,
+            "type_text_at": self._map_type,
+            "go_back": self._map_go_back,
+            "go_home": self._map_go_home,
+            "open_app": self._map_open_app,
+            "open_url": self._map_open_url,
+            "wait": self._map_wait,
+            "pinch": self._map_pinch,
+            "scroll": self._map_scroll,
+        }
 
     def _log(self, level: str, message: str, category: str = "mobile_agent") -> None:
         """Log a message if logger is available."""
@@ -425,10 +447,129 @@ For text input, tap the field first, then use type_text_at.
 
         return agent_actions, reasoning_text, False, None, function_info
 
+    # -------------------------------------------------------------------------
+    # Action Mapping Methods - Individual mappers for each function type
+    # -------------------------------------------------------------------------
+
+    def _map_tap(self, args: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        """Map tap_at function to tap action."""
+        return "tap", {"type": "tap", "x": args["x"], "y": args["y"]}
+
+    def _map_double_tap(self, args: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        """Map double_tap_at function to double_tap action."""
+        return "double_tap", {"type": "double_tap", "x": args["x"], "y": args["y"]}
+
+    def _map_long_press(self, args: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        """Map long_press_at function to long_press action."""
+        return "long_press", {
+            "type": "long_press",
+            "x": args["x"],
+            "y": args["y"],
+            "duration_ms": args.get("duration_ms", DEFAULT_LONG_PRESS_DURATION_MS),
+        }
+
+    def _map_swipe(self, args: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        """Map swipe function to swipe action."""
+        return "swipe", {
+            "type": "swipe",
+            "start_x": args["start_x"],
+            "start_y": args["start_y"],
+            "end_x": args["end_x"],
+            "end_y": args["end_y"],
+            "duration_ms": args.get("duration_ms", DEFAULT_SWIPE_DURATION_MS),
+        }
+
+    def _map_type(self, args: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        """Map type_text_at function to type action."""
+        return "type", {
+            "type": "type",
+            "x": args["x"],
+            "y": args["y"],
+            "text": args["text"],
+            "press_enter_after": args.get("press_enter", False),
+        }
+
+    def _map_go_back(self, args: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        """Map go_back function to navigate_back function action."""
+        return "function", {"type": "function", "name": "navigate_back", "arguments": None}
+
+    def _map_go_home(self, args: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        """Map go_home function to go_home function action."""
+        return "function", {"type": "function", "name": "go_home", "arguments": None}
+
+    def _map_open_app(self, args: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        """Map open_app function to open_app function action."""
+        return "function", {
+            "type": "function",
+            "name": "open_app",
+            "arguments": {"app_id": args["app_name"]},
+        }
+
+    def _map_open_url(self, args: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        """Map open_url function to goto function action."""
+        return "function", {
+            "type": "function",
+            "name": "goto",
+            "arguments": {"url": args["url"]},
+        }
+
+    def _map_wait(self, args: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        """Map wait function to wait action."""
+        return "wait", {
+            "type": "wait",
+            "miliseconds": int(args.get("seconds", 1) * 1000),
+        }
+
+    def _map_pinch(self, args: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        """Map pinch function to pinch action."""
+        return "pinch", {
+            "type": "pinch",
+            "center_x": args["center_x"],
+            "center_y": args["center_y"],
+            "scale": args["scale"],
+            "duration_ms": DEFAULT_PINCH_DURATION_MS,
+        }
+
+    def _map_scroll(self, args: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+        """Map scroll function to swipe action.
+
+        Converts scroll direction to appropriate swipe gesture.
+        Uses normalized coordinates (0-1000 grid).
+        """
+        direction = args.get("direction", "down")
+        amount = args.get("amount", 5) * 100  # Convert to grid units
+
+        # Scroll direction positions in 1000-grid coordinates
+        center = COORDINATE_GRID_SIZE // 2  # 500
+        near_edge = int(COORDINATE_GRID_SIZE * 0.3)  # 300
+        far_edge = int(COORDINATE_GRID_SIZE * 0.7)  # 700
+
+        scroll_params = {
+            "down": (center, far_edge, center, far_edge - amount),
+            "up": (center, near_edge, center, near_edge + amount),
+            "left": (far_edge, center, far_edge - amount, center),
+            "right": (near_edge, center, near_edge + amount, center),
+        }
+
+        start_x, start_y, end_x, end_y = scroll_params.get(
+            direction, scroll_params["down"]
+        )
+
+        return "swipe", {
+            "type": "swipe",
+            "start_x": start_x,
+            "start_y": start_y,
+            "end_x": end_x,
+            "end_y": end_y,
+            "duration_ms": DEFAULT_SWIPE_DURATION_MS,
+        }
+
     def _map_function_to_action(
         self, name: str, args: dict[str, Any]
     ) -> Optional[AgentAction]:
         """Map a Google CUA function call to an AgentAction.
+
+        Uses dispatch table for clean function-to-action mapping.
 
         Args:
             name: Function name
@@ -437,163 +578,18 @@ For text input, tap the field first, then use type_text_at.
         Returns:
             AgentAction or None if unsupported
         """
-        action_payload: Optional[dict[str, Any]] = None
-        action_type = ""
-
-        if name == "tap_at":
-            action_type = "tap"
-            action_payload = {
-                "type": "tap",
-                "x": args["x"],
-                "y": args["y"],
-            }
-
-        elif name == "double_tap_at":
-            action_type = "double_tap"
-            action_payload = {
-                "type": "double_tap",
-                "x": args["x"],
-                "y": args["y"],
-            }
-
-        elif name == "long_press_at":
-            action_type = "long_press"
-            action_payload = {
-                "type": "long_press",
-                "x": args["x"],
-                "y": args["y"],
-                "duration_ms": args.get("duration_ms", 500),
-            }
-
-        elif name == "swipe":
-            action_type = "swipe"
-            action_payload = {
-                "type": "swipe",
-                "start_x": args["start_x"],
-                "start_y": args["start_y"],
-                "end_x": args["end_x"],
-                "end_y": args["end_y"],
-                "duration_ms": args.get("duration_ms", 300),
-            }
-
-        elif name == "type_text_at":
-            action_type = "type"
-            action_payload = {
-                "type": "type",
-                "x": args["x"],
-                "y": args["y"],
-                "text": args["text"],
-                "press_enter_after": args.get("press_enter", False),
-            }
-
-        elif name == "go_back":
-            action_type = "function"
-            action_payload = {
-                "type": "function",
-                "name": "navigate_back",
-                "arguments": None,
-            }
-
-        elif name == "go_home":
-            action_type = "function"
-            action_payload = {
-                "type": "function",
-                "name": "go_home",
-                "arguments": None,
-            }
-
-        elif name == "open_app":
-            action_type = "function"
-            action_payload = {
-                "type": "function",
-                "name": "open_app",
-                "arguments": {"app_id": args["app_name"]},
-            }
-
-        elif name == "open_url":
-            action_type = "function"
-            action_payload = {
-                "type": "function",
-                "name": "goto",
-                "arguments": {"url": args["url"]},
-            }
-
-        elif name == "wait":
-            action_type = "wait"
-            action_payload = {
-                "type": "wait",
-                "miliseconds": int(args.get("seconds", 1) * 1000),
-            }
-
-        elif name == "pinch":
-            action_type = "pinch"
-            action_payload = {
-                "type": "pinch",
-                "center_x": args["center_x"],
-                "center_y": args["center_y"],
-                "scale": args["scale"],
-                "duration_ms": 300,
-            }
-
-        elif name == "scroll":
-            action_type = "swipe"
-            direction = args.get("direction", "down")
-            amount = args.get("amount", 5) * 100  # Convert to pixel-ish value
-
-            # Map scroll direction to swipe (opposite direction)
-            if direction == "down":
-                action_payload = {
-                    "type": "swipe",
-                    "start_x": 500,
-                    "start_y": 700,
-                    "end_x": 500,
-                    "end_y": 700 - amount,
-                    "duration_ms": 300,
-                }
-            elif direction == "up":
-                action_payload = {
-                    "type": "swipe",
-                    "start_x": 500,
-                    "start_y": 300,
-                    "end_x": 500,
-                    "end_y": 300 + amount,
-                    "duration_ms": 300,
-                }
-            elif direction == "left":
-                action_payload = {
-                    "type": "swipe",
-                    "start_x": 700,
-                    "start_y": 500,
-                    "end_x": 700 - amount,
-                    "end_y": 500,
-                    "duration_ms": 300,
-                }
-            elif direction == "right":
-                action_payload = {
-                    "type": "swipe",
-                    "start_x": 300,
-                    "start_y": 500,
-                    "end_x": 300 + amount,
-                    "end_y": 500,
-                    "duration_ms": 300,
-                }
-
-        else:
+        mapper = self._action_mappers.get(name)
+        if not mapper:
             self._log("error", f"Unsupported function: {name}")
             return None
 
-        if action_payload:
-            try:
-                action_model = TypeAdapter(AgentActionType).validate_python(action_payload)
-                return AgentAction(
-                    action_type=action_type,
-                    action=action_model,
-                )
-            except Exception as e:
-                self._log("error", f"Failed to parse action {name}: {e}")
-                return None
-
-        return None
+        try:
+            action_type, action_payload = mapper(args)
+            action_model = TypeAdapter(AgentActionType).validate_python(action_payload)
+            return AgentAction(action_type=action_type, action=action_model)
+        except Exception as e:
+            self._log("error", f"Failed to parse action {name}: {e}")
+            return None
 
     def _format_action_feedback(
         self,
@@ -637,6 +633,22 @@ For text input, tap the field first, then use type_text_at.
         self.history.append(feedback_content)
         return feedback_content
 
+    def _trim_history(self) -> None:
+        """Trim history to prevent unbounded memory growth.
+
+        Keeps the first message (system prompt + initial instruction) and
+        the most recent messages up to MAX_HISTORY_LENGTH.
+        """
+        if len(self.history) > MAX_HISTORY_LENGTH:
+            # Keep first message (instruction) and trim from the middle
+            keep_first = 1
+            keep_recent = MAX_HISTORY_LENGTH - keep_first
+            self.history = self.history[:keep_first] + self.history[-keep_recent:]
+            self._log(
+                "debug",
+                f"Trimmed history to {len(self.history)} messages (limit: {MAX_HISTORY_LENGTH})",
+            )
+
     async def run_task(
         self,
         instruction: str,
@@ -674,15 +686,23 @@ For text input, tap the field first, then use type_text_at.
         for step in range(max_steps):
             self._log("info", f"Step {step + 1}/{max_steps}")
 
-            start_time = asyncio.get_event_loop().time()
+            # Enforce history limit to prevent memory leak
+            self._trim_history()
+
+            start_time = time.monotonic()
 
             try:
-                response = self.genai_client.models.generate_content(
-                    model=self.model,
-                    contents=self.history,
-                    config=self._generate_content_config,
+                # Run blocking Gemini API call in executor to avoid blocking event loop
+                loop = asyncio.get_running_loop()
+                response = await loop.run_in_executor(
+                    None,
+                    lambda: self.genai_client.models.generate_content(
+                        model=self.model,
+                        contents=self.history,
+                        config=self._generate_content_config,
+                    ),
                 )
-                end_time = asyncio.get_event_loop().time()
+                end_time = time.monotonic()
                 total_inference_time_ms += int((end_time - start_time) * 1000)
 
             except Exception as e:

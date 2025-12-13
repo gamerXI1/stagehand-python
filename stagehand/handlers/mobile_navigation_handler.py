@@ -1,9 +1,8 @@
 """Mobile navigation handler for executing touch gestures via Appium."""
 
 import asyncio
-import base64
 import math
-from typing import Any, Optional
+from typing import Any, Callable, Coroutine, Optional
 
 from selenium.webdriver.common.actions import interaction
 from selenium.webdriver.common.actions.action_builder import ActionBuilder
@@ -13,17 +12,26 @@ from ..mobile.appium_client import AppiumClient
 from ..types.agent import (
     ActionExecutionResult,
     AgentAction,
+    ClickAction,
+    DoubleClickAction,
     DoubleTapAction,
+    FunctionAction,
     LongPressAction,
     PinchAction,
     RotateAction,
+    ScreenshotAction,
+    ScrollAction,
     SwipeAction,
     TapAction,
     TypeAction,
     WaitAction,
-    ScrollAction,
-    FunctionAction,
-    ScreenshotAction,
+)
+from ..types.mobile import (
+    COORDINATE_GRID_SIZE,
+    DEFAULT_DOUBLE_TAP_INTERVAL_MS,
+    DEFAULT_TAP_DURATION_MS,
+    PINCH_BASE_DISTANCE_PX,
+    ROTATE_RADIUS_PX,
 )
 
 
@@ -40,9 +48,6 @@ class MobileNavigationHandler:
     - Navigation (back, home, app launch)
     """
 
-    # Google CUA uses a 1000x1000 normalized coordinate grid
-    COORDINATE_GRID_SIZE = 1000
-
     def __init__(
         self,
         appium_client: AppiumClient,
@@ -56,6 +61,25 @@ class MobileNavigationHandler:
         """
         self.appium_client = appium_client
         self.logger = logger
+
+        # Action dispatch table - maps action_type to handler method
+        self._action_dispatch: dict[
+            str, Callable[[Any], Coroutine[Any, Any, ActionExecutionResult]]
+        ] = {
+            "tap": self._perform_tap,
+            "double_tap": self._perform_double_tap,
+            "long_press": self._perform_long_press,
+            "swipe": self._perform_swipe,
+            "pinch": self._perform_pinch,
+            "rotate": self._perform_rotate,
+            "type": self._perform_type,
+            "scroll": self._perform_scroll,
+            "wait": self._perform_wait,
+            "screenshot": self._perform_screenshot,
+            "function": self._perform_function,
+            "click": self._perform_tap_from_click,
+            "double_click": self._perform_double_tap_from_click,
+        }
 
     def _log(self, level: str, message: str, category: str = "mobile") -> None:
         """Log a message if logger is available."""
@@ -72,7 +96,7 @@ class MobileNavigationHandler:
         Returns:
             X coordinate in device pixels
         """
-        return int(x / self.COORDINATE_GRID_SIZE * self.appium_client.viewport_width)
+        return int(x / COORDINATE_GRID_SIZE * self.appium_client.viewport_width)
 
     def normalize_y(self, y: int) -> int:
         """Convert Y coordinate from 1000-grid to device pixels.
@@ -83,7 +107,7 @@ class MobileNavigationHandler:
         Returns:
             Y coordinate in device pixels
         """
-        return int(y / self.COORDINATE_GRID_SIZE * self.appium_client.viewport_height)
+        return int(y / COORDINATE_GRID_SIZE * self.appium_client.viewport_height)
 
     def normalize_coordinates(self, x: int, y: int) -> tuple[int, int]:
         """Convert coordinates from 1000-grid to device pixels.
@@ -114,59 +138,19 @@ class MobileNavigationHandler:
         Returns:
             ActionExecutionResult indicating success or failure
         """
-        action_model = action.action
         action_type = action.action_type
-
         self._log("info", f"Performing mobile action: {action_type}")
 
+        handler = self._action_dispatch.get(action_type)
+        if not handler:
+            self._log("error", f"Unsupported action type: {action_type}")
+            return ActionExecutionResult(
+                success=False,
+                error=f"Unsupported action type: {action_type}",
+            )
+
         try:
-            if action_type == "tap":
-                return await self._perform_tap(action_model)
-
-            elif action_type == "double_tap":
-                return await self._perform_double_tap(action_model)
-
-            elif action_type == "long_press":
-                return await self._perform_long_press(action_model)
-
-            elif action_type == "swipe":
-                return await self._perform_swipe(action_model)
-
-            elif action_type == "pinch":
-                return await self._perform_pinch(action_model)
-
-            elif action_type == "rotate":
-                return await self._perform_rotate(action_model)
-
-            elif action_type == "type":
-                return await self._perform_type(action_model)
-
-            elif action_type == "scroll":
-                return await self._perform_scroll(action_model)
-
-            elif action_type == "wait":
-                return await self._perform_wait(action_model)
-
-            elif action_type == "screenshot":
-                return await self._perform_screenshot(action_model)
-
-            elif action_type == "function":
-                return await self._perform_function(action_model)
-
-            # Map click actions to tap for mobile
-            elif action_type == "click":
-                return await self._perform_tap_from_click(action_model)
-
-            elif action_type == "double_click":
-                return await self._perform_double_tap_from_click(action_model)
-
-            else:
-                self._log("error", f"Unsupported action type: {action_type}")
-                return ActionExecutionResult(
-                    success=False,
-                    error=f"Unsupported action type: {action_type}",
-                )
-
+            return await handler(action.action)
         except Exception as e:
             self._log("error", f"Error executing action {action_type}: {e}")
             return ActionExecutionResult(success=False, error=str(e))
@@ -181,7 +165,7 @@ class MobileNavigationHandler:
             ActionExecutionResult
         """
         x, y = self.normalize_coordinates(action.x, action.y)
-        duration_ms = action.duration_ms or 50
+        duration_ms = action.duration_ms or DEFAULT_TAP_DURATION_MS
 
         self._log("debug", f"Tap at ({x}, {y}) duration={duration_ms}ms")
 
@@ -196,7 +180,7 @@ class MobileNavigationHandler:
         await self.appium_client.execute_touch_action(actions)
         return ActionExecutionResult(success=True, error=None)
 
-    async def _perform_tap_from_click(self, action: Any) -> ActionExecutionResult:
+    async def _perform_tap_from_click(self, action: ClickAction) -> ActionExecutionResult:
         """Convert click action to tap for mobile.
 
         Args:
@@ -206,13 +190,14 @@ class MobileNavigationHandler:
             ActionExecutionResult
         """
         x, y = self.normalize_coordinates(action.x, action.y)
+        duration_s = DEFAULT_TAP_DURATION_MS / 1000
 
         self._log("debug", f"Tap (from click) at ({x}, {y})")
 
         actions, touch = self.appium_client.create_touch_action()
         actions.pointer_action.move_to_location(x, y)
         actions.pointer_action.pointer_down()
-        actions.pointer_action.pause(0.05)
+        actions.pointer_action.pause(duration_s)
         actions.pointer_action.pointer_up()
 
         await self.appium_client.execute_touch_action(actions)
@@ -228,6 +213,8 @@ class MobileNavigationHandler:
             ActionExecutionResult
         """
         x, y = self.normalize_coordinates(action.x, action.y)
+        tap_duration_s = DEFAULT_TAP_DURATION_MS / 1000
+        interval_s = DEFAULT_DOUBLE_TAP_INTERVAL_MS / 1000
 
         self._log("debug", f"Double tap at ({x}, {y})")
 
@@ -236,21 +223,23 @@ class MobileNavigationHandler:
         # First tap
         actions.pointer_action.move_to_location(x, y)
         actions.pointer_action.pointer_down()
-        actions.pointer_action.pause(0.05)
+        actions.pointer_action.pause(tap_duration_s)
         actions.pointer_action.pointer_up()
 
         # Brief pause between taps
-        actions.pointer_action.pause(0.1)
+        actions.pointer_action.pause(interval_s)
 
         # Second tap
         actions.pointer_action.pointer_down()
-        actions.pointer_action.pause(0.05)
+        actions.pointer_action.pause(tap_duration_s)
         actions.pointer_action.pointer_up()
 
         await self.appium_client.execute_touch_action(actions)
         return ActionExecutionResult(success=True, error=None)
 
-    async def _perform_double_tap_from_click(self, action: Any) -> ActionExecutionResult:
+    async def _perform_double_tap_from_click(
+        self, action: DoubleClickAction
+    ) -> ActionExecutionResult:
         """Convert double click action to double tap for mobile.
 
         Args:
@@ -260,6 +249,8 @@ class MobileNavigationHandler:
             ActionExecutionResult
         """
         x, y = self.normalize_coordinates(action.x, action.y)
+        tap_duration_s = DEFAULT_TAP_DURATION_MS / 1000
+        interval_s = DEFAULT_DOUBLE_TAP_INTERVAL_MS / 1000
 
         self._log("debug", f"Double tap (from double_click) at ({x}, {y})")
 
@@ -267,11 +258,11 @@ class MobileNavigationHandler:
 
         actions.pointer_action.move_to_location(x, y)
         actions.pointer_action.pointer_down()
-        actions.pointer_action.pause(0.05)
+        actions.pointer_action.pause(tap_duration_s)
         actions.pointer_action.pointer_up()
-        actions.pointer_action.pause(0.1)
+        actions.pointer_action.pause(interval_s)
         actions.pointer_action.pointer_down()
-        actions.pointer_action.pause(0.05)
+        actions.pointer_action.pause(tap_duration_s)
         actions.pointer_action.pointer_up()
 
         await self.appium_client.execute_touch_action(actions)
@@ -357,7 +348,7 @@ class MobileNavigationHandler:
         # Calculate finger positions
         # For pinch in (scale < 1): fingers start apart, move together
         # For pinch out (scale > 1): fingers start together, move apart
-        base_distance = 100  # Base distance in pixels
+        base_distance = PINCH_BASE_DISTANCE_PX
 
         if scale < 1.0:
             # Pinch in: start far, end close
@@ -373,7 +364,7 @@ class MobileNavigationHandler:
             f"Pinch at ({center_x}, {center_y}) scale={scale} duration={duration_ms}ms",
         )
 
-        driver = self.appium_client._ensure_connected()
+        driver = self.appium_client.get_driver()
 
         # Create two separate touch inputs for multi-touch
         finger1 = PointerInput(interaction.POINTER_TOUCH, "finger1")
@@ -386,7 +377,7 @@ class MobileNavigationHandler:
         f2_end_x = center_x + end_distance
 
         # Build finger 1 action sequence
-        finger1_actions = finger1.create_pointer_move(
+        finger1.create_pointer_move(
             duration=0, x=f1_start_x, y=center_y, origin="viewport"
         )
         finger1.create_pointer_down(button=0)
@@ -410,7 +401,7 @@ class MobileNavigationHandler:
         actions.add_action(finger1)
         actions.add_action(finger2)
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, actions.perform)
         return ActionExecutionResult(success=True, error=None)
 
@@ -426,14 +417,14 @@ class MobileNavigationHandler:
         center_x, center_y = self.normalize_coordinates(action.center_x, action.center_y)
         angle_rad = math.radians(action.angle)
         duration_ms = action.duration_ms
-        radius = 80  # Fixed radius for rotation
+        radius = ROTATE_RADIUS_PX
 
         self._log(
             "debug",
             f"Rotate at ({center_x}, {center_y}) angle={action.angle}° duration={duration_ms}ms",
         )
 
-        driver = self.appium_client._ensure_connected()
+        driver = self.appium_client.get_driver()
 
         # Create two touch inputs for rotation
         finger1 = PointerInput(interaction.POINTER_TOUCH, "finger1")
@@ -480,7 +471,7 @@ class MobileNavigationHandler:
         actions.add_action(finger1)
         actions.add_action(finger2)
 
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, actions.perform)
         return ActionExecutionResult(success=True, error=None)
 

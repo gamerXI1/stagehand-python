@@ -7,7 +7,6 @@ from typing import Any, Optional
 from appium import webdriver as appium_webdriver
 from appium.options.android import UiAutomator2Options
 from appium.options.ios import XCUITestOptions
-from appium.webdriver.common.appiumby import AppiumBy
 from selenium.webdriver.common.actions import interaction
 from selenium.webdriver.common.actions.action_builder import ActionBuilder
 from selenium.webdriver.common.actions.pointer_input import PointerInput
@@ -64,7 +63,7 @@ class AppiumClient:
             options = self._build_options(self.session_config.capabilities)
 
             # Run synchronous WebDriver creation in executor
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             self.driver = await loop.run_in_executor(
                 None,
                 lambda: appium_webdriver.Remote(
@@ -124,7 +123,7 @@ class AppiumClient:
         if self.driver:
             self._log("info", "Disconnecting from Appium session")
             try:
-                loop = asyncio.get_event_loop()
+                loop = asyncio.get_running_loop()
                 await loop.run_in_executor(None, self.driver.quit)
             except Exception as e:
                 self._log("error", f"Error disconnecting: {e}")
@@ -134,7 +133,7 @@ class AppiumClient:
                 self._viewport_height = None
 
     def _ensure_connected(self) -> appium_webdriver.Remote:
-        """Ensure driver is connected.
+        """Ensure driver is connected (internal use).
 
         Returns:
             The active WebDriver instance
@@ -146,6 +145,20 @@ class AppiumClient:
             raise RuntimeError("Not connected to Appium. Call connect() first.")
         return self.driver
 
+    def get_driver(self) -> appium_webdriver.Remote:
+        """Get the WebDriver instance for advanced operations.
+
+        Use this method when you need direct access to the driver
+        for operations not covered by this client.
+
+        Returns:
+            The active WebDriver instance
+
+        Raises:
+            RuntimeError: If not connected
+        """
+        return self._ensure_connected()
+
     async def get_screenshot_base64(self) -> str:
         """Capture device screenshot as base64 encoded PNG.
 
@@ -153,7 +166,7 @@ class AppiumClient:
             Base64 encoded screenshot string
         """
         driver = self._ensure_connected()
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         screenshot = await loop.run_in_executor(None, driver.get_screenshot_as_base64)
         return screenshot
 
@@ -173,7 +186,7 @@ class AppiumClient:
             Dict with 'width' and 'height' keys
         """
         driver = self._ensure_connected()
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         size = await loop.run_in_executor(None, driver.get_window_size)
         return {"width": size["width"], "height": size["height"]}
 
@@ -198,7 +211,7 @@ class AppiumClient:
             XML string of the view hierarchy
         """
         driver = self._ensure_connected()
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, lambda: driver.page_source)
 
     async def get_current_context(self) -> str:
@@ -208,7 +221,7 @@ class AppiumClient:
             Current context string
         """
         driver = self._ensure_connected()
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, lambda: driver.current_context)
 
     async def get_contexts(self) -> list[str]:
@@ -218,7 +231,7 @@ class AppiumClient:
             List of context strings (e.g., ['NATIVE_APP', 'WEBVIEW_chrome'])
         """
         driver = self._ensure_connected()
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, lambda: driver.contexts)
 
     async def switch_context(self, context: str) -> None:
@@ -229,7 +242,7 @@ class AppiumClient:
         """
         driver = self._ensure_connected()
         self._log("info", f"Switching to context: {context}")
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, lambda: driver.switch_to.context(context))
 
     async def launch_app(self, app_id: str) -> None:
@@ -240,7 +253,7 @@ class AppiumClient:
         """
         driver = self._ensure_connected()
         self._log("info", f"Launching app: {app_id}")
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, lambda: driver.activate_app(app_id))
 
     async def terminate_app(self, app_id: str) -> bool:
@@ -254,7 +267,7 @@ class AppiumClient:
         """
         driver = self._ensure_connected()
         self._log("info", f"Terminating app: {app_id}")
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, lambda: driver.terminate_app(app_id))
 
     async def open_url(self, url: str) -> None:
@@ -265,7 +278,7 @@ class AppiumClient:
         """
         driver = self._ensure_connected()
         self._log("info", f"Opening URL: {url}")
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, lambda: driver.get(url))
 
     async def get_current_url(self) -> str:
@@ -275,14 +288,14 @@ class AppiumClient:
             Current URL string
         """
         driver = self._ensure_connected()
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, lambda: driver.current_url)
 
     async def press_home(self) -> None:
         """Press the home button."""
         driver = self._ensure_connected()
         self._log("debug", "Pressing home button")
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         platform = self.session_config.capabilities.platform_name
         if platform == MobilePlatform.IOS:
@@ -301,7 +314,7 @@ class AppiumClient:
         """Press the back button (Android) or navigate back (iOS)."""
         driver = self._ensure_connected()
         self._log("debug", "Pressing back button")
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         platform = self.session_config.capabilities.platform_name
         if platform == MobilePlatform.ANDROID:
@@ -319,7 +332,7 @@ class AppiumClient:
         """
         driver = self._ensure_connected()
         self._log("debug", "Locking device")
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         if seconds:
             await loop.run_in_executor(None, lambda: driver.lock(seconds))
@@ -330,7 +343,7 @@ class AppiumClient:
         """Unlock the device screen."""
         driver = self._ensure_connected()
         self._log("debug", "Unlocking device")
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, lambda: driver.unlock())
 
     async def is_locked(self) -> bool:
@@ -340,7 +353,7 @@ class AppiumClient:
             True if device is locked
         """
         driver = self._ensure_connected()
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, lambda: driver.is_locked())
 
     async def set_orientation(self, orientation: str) -> None:
@@ -351,7 +364,7 @@ class AppiumClient:
         """
         driver = self._ensure_connected()
         self._log("debug", f"Setting orientation: {orientation}")
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, lambda: setattr(driver, "orientation", orientation))
 
     async def get_orientation(self) -> str:
@@ -361,14 +374,14 @@ class AppiumClient:
             'PORTRAIT' or 'LANDSCAPE'
         """
         driver = self._ensure_connected()
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, lambda: driver.orientation)
 
     async def hide_keyboard(self) -> None:
         """Hide the on-screen keyboard if visible."""
         driver = self._ensure_connected()
         try:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             await loop.run_in_executor(None, lambda: driver.hide_keyboard())
         except Exception:
             # Keyboard might not be visible
@@ -381,7 +394,7 @@ class AppiumClient:
             True if keyboard is shown
         """
         driver = self._ensure_connected()
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, lambda: driver.is_keyboard_shown())
 
     def create_touch_action(self) -> tuple[ActionBuilder, PointerInput]:
@@ -402,7 +415,7 @@ class AppiumClient:
             actions: ActionBuilder with configured touch actions
         """
         self._ensure_connected()
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, actions.perform)
 
     async def find_element(self, by: str, value: str) -> Any:
@@ -416,7 +429,7 @@ class AppiumClient:
             WebElement if found
         """
         driver = self._ensure_connected()
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, lambda: driver.find_element(by, value))
 
     async def find_elements(self, by: str, value: str) -> list[Any]:
@@ -430,7 +443,7 @@ class AppiumClient:
             List of WebElements
         """
         driver = self._ensure_connected()
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(None, lambda: driver.find_elements(by, value))
 
     async def send_keys(self, text: str) -> None:
@@ -440,7 +453,7 @@ class AppiumClient:
             text: Text to type
         """
         driver = self._ensure_connected()
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         # Get active element and send keys
         active = await loop.run_in_executor(None, lambda: driver.switch_to.active_element)
@@ -449,7 +462,7 @@ class AppiumClient:
     async def clear_text(self) -> None:
         """Clear text from the active element."""
         driver = self._ensure_connected()
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
 
         active = await loop.run_in_executor(None, lambda: driver.switch_to.active_element)
         await loop.run_in_executor(None, lambda: active.clear())

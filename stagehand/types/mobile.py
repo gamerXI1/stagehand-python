@@ -1,9 +1,120 @@
 """Mobile device types, profiles, and Appium configuration models."""
 
 from enum import Enum
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Optional, Protocol, runtime_checkable
 
 from pydantic import BaseModel, Field
+
+
+# =============================================================================
+# Constants
+# =============================================================================
+
+COORDINATE_GRID_SIZE = 1000  # Google CUA uses 1000x1000 normalized grid
+
+# Gesture timing defaults (milliseconds)
+DEFAULT_TAP_DURATION_MS = 50
+DEFAULT_DOUBLE_TAP_INTERVAL_MS = 100
+DEFAULT_LONG_PRESS_DURATION_MS = 500
+DEFAULT_SWIPE_DURATION_MS = 300
+DEFAULT_PINCH_DURATION_MS = 300
+DEFAULT_ROTATE_DURATION_MS = 300
+
+# Gesture geometry (pixels)
+PINCH_BASE_DISTANCE_PX = 100
+ROTATE_RADIUS_PX = 80
+
+# Agent limits
+MAX_HISTORY_LENGTH = 50
+DEFAULT_MAX_STEPS = 20
+DEFAULT_WAIT_BETWEEN_ACTIONS_MS = 500
+
+
+# =============================================================================
+# Protocols (Interfaces)
+# =============================================================================
+
+
+@runtime_checkable
+class MobileClientProtocol(Protocol):
+    """Protocol for mobile device automation clients.
+
+    Implement this protocol to create alternative backends (e.g., Maestro, Detox).
+    """
+
+    @property
+    def viewport_width(self) -> int:
+        """Device viewport width in pixels."""
+        ...
+
+    @property
+    def viewport_height(self) -> int:
+        """Device viewport height in pixels."""
+        ...
+
+    async def connect(self) -> None:
+        """Establish connection to device."""
+        ...
+
+    async def disconnect(self) -> None:
+        """Close connection and cleanup."""
+        ...
+
+    async def get_screenshot_base64(self) -> str:
+        """Capture screenshot as base64 PNG."""
+        ...
+
+    async def tap(self, x: int, y: int, duration_ms: int) -> None:
+        """Tap at coordinates."""
+        ...
+
+    async def swipe(
+        self, start_x: int, start_y: int, end_x: int, end_y: int, duration_ms: int
+    ) -> None:
+        """Swipe from start to end coordinates."""
+        ...
+
+    async def send_keys(self, text: str) -> None:
+        """Type text."""
+        ...
+
+    async def press_home(self) -> None:
+        """Press home button."""
+        ...
+
+    async def press_back(self) -> None:
+        """Press back button."""
+        ...
+
+    async def launch_app(self, app_id: str) -> None:
+        """Launch app by ID."""
+        ...
+
+    async def open_url(self, url: str) -> None:
+        """Open URL in browser."""
+        ...
+
+
+@runtime_checkable
+class CUAClientProtocol(Protocol):
+    """Protocol for Computer Use Agent clients.
+
+    Implement this protocol to use alternative AI providers (Anthropic, OpenAI).
+    """
+
+    async def run_task(
+        self,
+        instruction: str,
+        max_steps: int,
+        options: Optional[Any] = None,
+    ) -> Any:
+        """Execute a task and return result."""
+        ...
+
+
+# =============================================================================
+# Enums
+# =============================================================================
 
 
 class MobilePlatform(str, Enum):
@@ -206,8 +317,8 @@ class MobileAgentConfig(BaseModel):
     session_config: Optional[MobileSessionConfig] = None
     model: str = "gemini-2.5-computer-use-preview-10-2025"
     instructions: Optional[str] = None
-    max_steps: int = 20
-    wait_between_actions_ms: int = 500
+    max_steps: int = DEFAULT_MAX_STEPS
+    wait_between_actions_ms: int = DEFAULT_WAIT_BETWEEN_ACTIONS_MS
     options: Optional[dict[str, Any]] = None
 
 
