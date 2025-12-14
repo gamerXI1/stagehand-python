@@ -213,7 +213,7 @@ class TestWaitAction:
     async def test_perform_wait(self, handler):
         action = AgentAction(
             action_type="wait",
-            action=WaitAction(type="wait", miliseconds=100),
+            action=WaitAction(type="wait", milliseconds=100),
         )
         result = await handler.perform_action(action)
         assert result.success is True

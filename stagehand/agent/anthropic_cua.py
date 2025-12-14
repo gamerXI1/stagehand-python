@@ -542,7 +542,7 @@ class AnthropicCUAClient(AgentClient):
                 # Convert seconds to milliseconds
                 action_payload_dict = {
                     "type": "wait",
-                    "miliseconds": int(duration * 1000),
+                    "milliseconds": int(duration * 1000),
                 }
 
             elif action_type_str == "screenshot":

@@ -175,7 +175,7 @@ class CUAHandler:  # Computer Use Agent Handler
 
             elif action_type == "wait":
                 await asyncio.gather(
-                    asyncio.sleep(specific_action_model.miliseconds / 1000),
+                    asyncio.sleep(specific_action_model.milliseconds / 1000),
                     self.inject_cursor(),
                 )
                 return {"success": True}

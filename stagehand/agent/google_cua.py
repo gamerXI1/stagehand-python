@@ -340,7 +340,7 @@ class GoogleCUAClient(AgentClient):
                 }
             elif action_name == "wait_5_seconds":
                 action_type_str = "wait"
-                action_payload_dict = {"type": "wait", "miliseconds": 5000}
+                action_payload_dict = {"type": "wait", "milliseconds": 5000}
             elif action_name == "hover_at":
                 action_type_str = "move"
                 x, y = self._normalize_coordinates(action_args["x"], action_args["y"])
