@@ -47,22 +47,27 @@ def handler(mock_appium_client):
 
 
 class TestCoordinateNormalization:
-    """Tests for coordinate normalization."""
+    """Tests for coordinate normalization.
+
+    Uses formula: pixel = grid * (viewport - 1) / 1000
+    This maps 0-1000 grid to 0-(viewport-1) pixels, ensuring max grid
+    coordinate maps to max valid pixel (not off-screen).
+    """
 
     def test_normalize_x(self, handler):
-        # 500 on 1000-grid should be half of viewport width
+        # 500 on 1000-grid should be close to half of viewport width
         result = handler.normalize_x(500)
-        assert result == 196  # 500/1000 * 393 = 196.5 -> 196
+        assert result == 196  # 500 * 392 / 1000 = 196
 
     def test_normalize_y(self, handler):
-        # 500 on 1000-grid should be half of viewport height
+        # 500 on 1000-grid should be close to half of viewport height
         result = handler.normalize_y(500)
-        assert result == 426  # 500/1000 * 852 = 426
+        assert result == 425  # 500 * 851 / 1000 = 425.5 -> 425
 
     def test_normalize_coordinates(self, handler):
         x, y = handler.normalize_coordinates(250, 750)
-        assert x == 98  # 250/1000 * 393 = 98.25 -> 98
-        assert y == 639  # 750/1000 * 852 = 639
+        assert x == 98  # 250 * 392 / 1000 = 98
+        assert y == 638  # 750 * 851 / 1000 = 638.25 -> 638
 
     def test_normalize_zero(self, handler):
         x, y = handler.normalize_coordinates(0, 0)
@@ -70,9 +75,22 @@ class TestCoordinateNormalization:
         assert y == 0
 
     def test_normalize_max(self, handler):
+        # Max grid (1000) should map to max valid pixel (viewport - 1)
         x, y = handler.normalize_coordinates(1000, 1000)
-        assert x == 393
-        assert y == 852
+        assert x == 392  # 1000 * 392 / 1000 = 392 (max valid pixel)
+        assert y == 851  # 1000 * 851 / 1000 = 851 (max valid pixel)
+
+    def test_normalize_clamps_negative(self, handler):
+        # Negative coordinates should clamp to 0
+        x, y = handler.normalize_coordinates(-100, -50)
+        assert x == 0
+        assert y == 0
+
+    def test_normalize_clamps_overflow(self, handler):
+        # Coordinates > 1000 should clamp to max valid pixel
+        x, y = handler.normalize_coordinates(1500, 2000)
+        assert x == 392
+        assert y == 851
 
 
 class TestTapAction:

@@ -89,16 +89,25 @@ class MobileNavigationHandler:
     def normalize_x(self, x: int) -> int:
         """Convert X coordinate from 1000-grid to device pixels.
 
+        Maps 0-1000 grid to 0-(viewport_width-1) pixels to avoid off-by-one
+        errors at screen edges.
+
         Args:
             x: X coordinate in 0-1000 range
 
         Returns:
             X coordinate in device pixels
         """
-        return int(x / COORDINATE_GRID_SIZE * self.appium_client.viewport_width)
+        # Clamp to valid grid range
+        x = max(0, min(COORDINATE_GRID_SIZE, x))
+        # Map 0-1000 to 0-(width-1) to avoid off-screen coordinates
+        return int(x * (self.appium_client.viewport_width - 1) / COORDINATE_GRID_SIZE)
 
     def normalize_y(self, y: int) -> int:
         """Convert Y coordinate from 1000-grid to device pixels.
+
+        Maps 0-1000 grid to 0-(viewport_height-1) pixels to avoid off-by-one
+        errors at screen edges.
 
         Args:
             y: Y coordinate in 0-1000 range
@@ -106,7 +115,10 @@ class MobileNavigationHandler:
         Returns:
             Y coordinate in device pixels
         """
-        return int(y / COORDINATE_GRID_SIZE * self.appium_client.viewport_height)
+        # Clamp to valid grid range
+        y = max(0, min(COORDINATE_GRID_SIZE, y))
+        # Map 0-1000 to 0-(height-1) to avoid off-screen coordinates
+        return int(y * (self.appium_client.viewport_height - 1) / COORDINATE_GRID_SIZE)
 
     def normalize_coordinates(self, x: int, y: int) -> tuple[int, int]:
         """Convert coordinates from 1000-grid to device pixels.
