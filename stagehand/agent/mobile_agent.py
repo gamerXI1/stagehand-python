@@ -1,6 +1,10 @@
 """Mobile agent for automating iOS and Android devices."""
 
-from typing import Any, Optional
+import functools
+from typing import Any, Callable, Optional, TypeVar
+
+# Type variable for decorator return type preservation
+F = TypeVar("F", bound=Callable[..., Any])
 
 from ..handlers.mobile_navigation_handler import MobileNavigationHandler
 from ..mobile.appium_client import AppiumClient
@@ -17,6 +21,18 @@ from ..types.mobile import (
     MobileSessionConfig,
 )
 from .google_mobile_cua import GoogleMobileCUAClient
+
+
+def _require_connection(method: F) -> F:
+    """Decorator to ensure connection before method execution."""
+
+    @functools.wraps(method)
+    async def wrapper(self: "MobileAgent", *args: Any, **kwargs: Any) -> Any:
+        if not self._connected or not self.appium_client:
+            raise RuntimeError("Not connected. Call connect() first.")
+        return await method(self, *args, **kwargs)
+
+    return wrapper  # type: ignore[return-value]
 
 
 class MobileAgent:
@@ -267,6 +283,7 @@ class MobileAgent:
 
         return result
 
+    @_require_connection
     async def screenshot(self) -> str:
         """Capture a screenshot of the device.
 
@@ -276,11 +293,9 @@ class MobileAgent:
         Raises:
             RuntimeError: If not connected
         """
-        if not self._connected or not self.appium_client:
-            raise RuntimeError("Not connected. Call connect() first.")
+        return await self.appium_client.get_screenshot_base64()  # type: ignore[union-attr]
 
-        return await self.appium_client.get_screenshot_base64()
-
+    @_require_connection
     async def launch_app(self, app_id: str) -> None:
         """Launch an app by bundle ID (iOS) or package name (Android).
 
@@ -290,11 +305,9 @@ class MobileAgent:
         Raises:
             RuntimeError: If not connected
         """
-        if not self._connected or not self.appium_client:
-            raise RuntimeError("Not connected. Call connect() first.")
+        await self.appium_client.launch_app(app_id)  # type: ignore[union-attr]
 
-        await self.appium_client.launch_app(app_id)
-
+    @_require_connection
     async def open_url(self, url: str) -> None:
         """Open a URL in the mobile browser.
 
@@ -304,33 +317,27 @@ class MobileAgent:
         Raises:
             RuntimeError: If not connected
         """
-        if not self._connected or not self.appium_client:
-            raise RuntimeError("Not connected. Call connect() first.")
+        await self.appium_client.open_url(url)  # type: ignore[union-attr]
 
-        await self.appium_client.open_url(url)
-
+    @_require_connection
     async def go_home(self) -> None:
         """Press the home button.
 
         Raises:
             RuntimeError: If not connected
         """
-        if not self._connected or not self.appium_client:
-            raise RuntimeError("Not connected. Call connect() first.")
+        await self.appium_client.press_home()  # type: ignore[union-attr]
 
-        await self.appium_client.press_home()
-
+    @_require_connection
     async def go_back(self) -> None:
         """Press the back button.
 
         Raises:
             RuntimeError: If not connected
         """
-        if not self._connected or not self.appium_client:
-            raise RuntimeError("Not connected. Call connect() first.")
+        await self.appium_client.press_back()  # type: ignore[union-attr]
 
-        await self.appium_client.press_back()
-
+    @_require_connection
     async def get_orientation(self) -> str:
         """Get current device orientation.
 
@@ -340,11 +347,9 @@ class MobileAgent:
         Raises:
             RuntimeError: If not connected
         """
-        if not self._connected or not self.appium_client:
-            raise RuntimeError("Not connected. Call connect() first.")
+        return await self.appium_client.get_orientation()  # type: ignore[union-attr]
 
-        return await self.appium_client.get_orientation()
-
+    @_require_connection
     async def set_orientation(self, orientation: str) -> None:
         """Set device orientation.
 
@@ -354,11 +359,9 @@ class MobileAgent:
         Raises:
             RuntimeError: If not connected
         """
-        if not self._connected or not self.appium_client:
-            raise RuntimeError("Not connected. Call connect() first.")
+        await self.appium_client.set_orientation(orientation)  # type: ignore[union-attr]
 
-        await self.appium_client.set_orientation(orientation)
-
+    @_require_connection
     async def get_page_source(self) -> str:
         """Get the current view hierarchy as XML.
 
@@ -368,10 +371,7 @@ class MobileAgent:
         Raises:
             RuntimeError: If not connected
         """
-        if not self._connected or not self.appium_client:
-            raise RuntimeError("Not connected. Call connect() first.")
-
-        return await self.appium_client.get_page_source()
+        return await self.appium_client.get_page_source()  # type: ignore[union-attr]
 
     async def __aenter__(self) -> "MobileAgent":
         """Async context manager entry."""

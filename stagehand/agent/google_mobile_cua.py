@@ -1,6 +1,7 @@
 """Google CUA client configured for mobile device automation."""
 
 import asyncio
+import functools
 import os
 import time
 from typing import Any, Callable, Optional
@@ -38,6 +39,10 @@ from ..types.mobile import (
     MAX_HISTORY_LENGTH,
 )
 
+# Retry configuration
+MAX_API_RETRIES = 3
+RETRY_BASE_DELAY_S = 1.0
+
 
 class GoogleMobileCUAClient:
     """Google CUA client for mobile device automation.
@@ -55,7 +60,6 @@ class GoogleMobileCUAClient:
         handler: Optional[MobileNavigationHandler] = None,
         viewport_width: int = 393,
         viewport_height: int = 852,
-        **kwargs,
     ):
         """Initialize GoogleMobileCUAClient.
 
@@ -116,6 +120,17 @@ class GoogleMobileCUAClient:
             log_method = getattr(self.logger, level, self.logger.info)
             log_method(message, category=category)
 
+    def _clamp_coordinate(self, value: int) -> int:
+        """Clamp coordinate to valid 0-1000 range.
+
+        Args:
+            value: Coordinate value from model
+
+        Returns:
+            Clamped coordinate within valid range
+        """
+        return max(0, min(COORDINATE_GRID_SIZE, value))
+
     def _default_mobile_instructions(self) -> str:
         """Default system instructions for mobile automation."""
         return """You are a mobile device automation agent. You interact with iOS and Android devices through touch gestures.
@@ -141,10 +156,10 @@ For text input, tap the field first, then use type_text_at.
     def _build_config(self) -> GenerateContentConfig:
         """Build the GenerateContentConfig with mobile tools."""
         return GenerateContentConfig(
-            temperature=1,
-            top_p=0.95,
-            top_k=40,
-            max_output_tokens=8192,
+            temperature=0.3,  # Low for deterministic UI actions
+            top_p=0.9,
+            top_k=20,  # Focused sampling
+            max_output_tokens=2048,  # Actions don't need large output
             tools=[self._build_mobile_tools()],
         )
 
@@ -453,18 +468,26 @@ For text input, tap the field first, then use type_text_at.
 
     def _map_tap(self, args: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         """Map tap_at function to tap action."""
-        return "tap", {"type": "tap", "x": args["x"], "y": args["y"]}
+        return "tap", {
+            "type": "tap",
+            "x": self._clamp_coordinate(args["x"]),
+            "y": self._clamp_coordinate(args["y"]),
+        }
 
     def _map_double_tap(self, args: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         """Map double_tap_at function to double_tap action."""
-        return "double_tap", {"type": "double_tap", "x": args["x"], "y": args["y"]}
+        return "double_tap", {
+            "type": "double_tap",
+            "x": self._clamp_coordinate(args["x"]),
+            "y": self._clamp_coordinate(args["y"]),
+        }
 
     def _map_long_press(self, args: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         """Map long_press_at function to long_press action."""
         return "long_press", {
             "type": "long_press",
-            "x": args["x"],
-            "y": args["y"],
+            "x": self._clamp_coordinate(args["x"]),
+            "y": self._clamp_coordinate(args["y"]),
             "duration_ms": args.get("duration_ms", DEFAULT_LONG_PRESS_DURATION_MS),
         }
 
@@ -472,10 +495,10 @@ For text input, tap the field first, then use type_text_at.
         """Map swipe function to swipe action."""
         return "swipe", {
             "type": "swipe",
-            "start_x": args["start_x"],
-            "start_y": args["start_y"],
-            "end_x": args["end_x"],
-            "end_y": args["end_y"],
+            "start_x": self._clamp_coordinate(args["start_x"]),
+            "start_y": self._clamp_coordinate(args["start_y"]),
+            "end_x": self._clamp_coordinate(args["end_x"]),
+            "end_y": self._clamp_coordinate(args["end_y"]),
             "duration_ms": args.get("duration_ms", DEFAULT_SWIPE_DURATION_MS),
         }
 
@@ -483,8 +506,8 @@ For text input, tap the field first, then use type_text_at.
         """Map type_text_at function to type action."""
         return "type", {
             "type": "type",
-            "x": args["x"],
-            "y": args["y"],
+            "x": self._clamp_coordinate(args["x"]),
+            "y": self._clamp_coordinate(args["y"]),
             "text": args["text"],
             "press_enter_after": args.get("press_enter", False),
         }
@@ -517,15 +540,15 @@ For text input, tap the field first, then use type_text_at.
         """Map wait function to wait action."""
         return "wait", {
             "type": "wait",
-            "miliseconds": int(args.get("seconds", 1) * 1000),
+            "milliseconds": int(args.get("seconds", 1) * 1000),
         }
 
     def _map_pinch(self, args: dict[str, Any]) -> tuple[str, dict[str, Any]]:
         """Map pinch function to pinch action."""
         return "pinch", {
             "type": "pinch",
-            "center_x": args["center_x"],
-            "center_y": args["center_y"],
+            "center_x": self._clamp_coordinate(args["center_x"]),
+            "center_y": self._clamp_coordinate(args["center_y"]),
             "scale": args["scale"],
             "duration_ms": DEFAULT_PINCH_DURATION_MS,
         }
@@ -633,21 +656,55 @@ For text input, tap the field first, then use type_text_at.
         self.history.append(feedback_content)
         return feedback_content
 
+    def _has_error_response(self, content: Content) -> bool:
+        """Check if content contains an error response.
+
+        Args:
+            content: Content message to check
+
+        Returns:
+            True if content contains error information
+        """
+        for part in content.parts:
+            if hasattr(part, "function_response") and part.function_response:
+                resp = part.function_response
+                if hasattr(resp, "response") and isinstance(resp.response, dict):
+                    if resp.response.get("error"):
+                        return True
+        return False
+
     def _trim_history(self) -> None:
         """Trim history to prevent unbounded memory growth.
 
-        Keeps the first message (system prompt + initial instruction) and
-        the most recent messages up to MAX_HISTORY_LENGTH.
+        Keeps the first message (system prompt + initial instruction),
+        messages with errors (for context), and recent messages.
         """
-        if len(self.history) > MAX_HISTORY_LENGTH:
-            # Keep first message (instruction) and trim from the middle
-            keep_first = 1
-            keep_recent = MAX_HISTORY_LENGTH - keep_first
-            self.history = self.history[:keep_first] + self.history[-keep_recent:]
-            self._log(
-                "debug",
-                f"Trimmed history to {len(self.history)} messages (limit: {MAX_HISTORY_LENGTH})",
-            )
+        if len(self.history) <= MAX_HISTORY_LENGTH:
+            return
+
+        keep_first = 1
+        keep_recent = 20
+        max_errors = 5
+
+        # Find error messages in middle section
+        middle_start = keep_first
+        middle_end = len(self.history) - keep_recent
+        middle = self.history[middle_start:middle_end]
+
+        error_messages = [m for m in middle if self._has_error_response(m)][:max_errors]
+
+        # Reconstruct history: first + errors + recent
+        self.history = (
+            self.history[:keep_first]
+            + error_messages
+            + self.history[-keep_recent:]
+        )
+
+        self._log(
+            "debug",
+            f"Trimmed history to {len(self.history)} messages "
+            f"(kept {len(error_messages)} error messages)",
+        )
 
     async def run_task(
         self,
@@ -682,6 +739,8 @@ For text input, tap the field first, then use type_text_at.
 
         actions_taken: list[AgentActionType] = []
         total_inference_time_ms = 0
+        total_input_tokens = 0
+        total_output_tokens = 0
 
         for step in range(max_steps):
             self._log("info", f"Step {step + 1}/{max_steps}")
@@ -690,33 +749,60 @@ For text input, tap the field first, then use type_text_at.
             self._trim_history()
 
             start_time = time.monotonic()
+            response = None
+            last_error: Optional[Exception] = None
 
-            try:
-                # Run blocking Gemini API call in executor to avoid blocking event loop
-                loop = asyncio.get_running_loop()
-                response = await loop.run_in_executor(
-                    None,
-                    lambda: self.genai_client.models.generate_content(
-                        model=self.model,
-                        contents=self.history,
-                        config=self._generate_content_config,
-                    ),
-                )
-                end_time = time.monotonic()
-                total_inference_time_ms += int((end_time - start_time) * 1000)
+            # Retry loop with exponential backoff
+            for attempt in range(MAX_API_RETRIES):
+                try:
+                    # Run blocking Gemini API call in executor
+                    # Use functools.partial to avoid closure capture issues
+                    # Snapshot history with list() to prevent mutation during execution
+                    loop = asyncio.get_running_loop()
+                    response = await loop.run_in_executor(
+                        None,
+                        functools.partial(
+                            self.genai_client.models.generate_content,
+                            model=self.model,
+                            contents=list(self.history),
+                            config=self._generate_content_config,
+                        ),
+                    )
+                    break  # Success - exit retry loop
 
-            except Exception as e:
-                self._log("error", f"API call failed: {e}")
+                except Exception as e:
+                    last_error = e
+                    if attempt < MAX_API_RETRIES - 1:
+                        delay = RETRY_BASE_DELAY_S * (2 ** attempt)
+                        self._log(
+                            "warning",
+                            f"API call failed (attempt {attempt + 1}/{MAX_API_RETRIES}), "
+                            f"retrying in {delay}s: {e}",
+                        )
+                        await asyncio.sleep(delay)
+                    else:
+                        self._log("error", f"API call failed after {MAX_API_RETRIES} attempts: {e}")
+
+            if response is None:
                 return AgentResult(
                     actions=actions_taken,
-                    message=f"API error: {e}",
+                    message=f"API error after {MAX_API_RETRIES} retries: {last_error}",
                     completed=False,
                     usage={
-                        "input_tokens": 0,
-                        "output_tokens": 0,
+                        "input_tokens": total_input_tokens,
+                        "output_tokens": total_output_tokens,
                         "inference_time_ms": total_inference_time_ms,
                     },
                 )
+
+            end_time = time.monotonic()
+            total_inference_time_ms += int((end_time - start_time) * 1000)
+
+            # Track token usage from response
+            if hasattr(response, "usage_metadata") and response.usage_metadata:
+                metadata = response.usage_metadata
+                total_input_tokens += getattr(metadata, "prompt_token_count", 0)
+                total_output_tokens += getattr(metadata, "candidates_token_count", 0)
 
             (
                 agent_actions,
@@ -757,8 +843,8 @@ For text input, tap the field first, then use type_text_at.
                     message=final_message or "Task completed",
                     completed=True,
                     usage={
-                        "input_tokens": 0,
-                        "output_tokens": 0,
+                        "input_tokens": total_input_tokens,
+                        "output_tokens": total_output_tokens,
                         "inference_time_ms": total_inference_time_ms,
                     },
                 )
@@ -770,8 +856,8 @@ For text input, tap the field first, then use type_text_at.
                     message=final_message or "No further actions",
                     completed=False,
                     usage={
-                        "input_tokens": 0,
-                        "output_tokens": 0,
+                        "input_tokens": total_input_tokens,
+                        "output_tokens": total_output_tokens,
                         "inference_time_ms": total_inference_time_ms,
                     },
                 )
@@ -782,8 +868,8 @@ For text input, tap the field first, then use type_text_at.
             message="Max steps reached",
             completed=False,
             usage={
-                "input_tokens": 0,
-                "output_tokens": 0,
+                "input_tokens": total_input_tokens,
+                "output_tokens": total_output_tokens,
                 "inference_time_ms": total_inference_time_ms,
             },
         )

@@ -6,7 +6,6 @@ from typing import Any, Callable, Coroutine, Optional
 
 from selenium.webdriver.common.actions import interaction
 from selenium.webdriver.common.actions.action_builder import ActionBuilder
-from selenium.webdriver.common.actions.pointer_input import PointerInput
 
 from ..mobile.appium_client import AppiumClient
 from ..types.agent import (
@@ -344,6 +343,7 @@ class MobileNavigationHandler:
         center_x, center_y = self.normalize_coordinates(action.center_x, action.center_y)
         scale = action.scale
         duration_ms = action.duration_ms
+        duration_s = duration_ms / 1000
 
         # Calculate finger positions
         # For pinch in (scale < 1): fingers start apart, move together
@@ -366,40 +366,30 @@ class MobileNavigationHandler:
 
         driver = self.appium_client.get_driver()
 
-        # Create two separate touch inputs for multi-touch
-        finger1 = PointerInput(interaction.POINTER_TOUCH, "finger1")
-        finger2 = PointerInput(interaction.POINTER_TOUCH, "finger2")
-
         # Calculate start and end positions for both fingers (horizontal pinch)
         f1_start_x = center_x - start_distance
         f1_end_x = center_x - end_distance
         f2_start_x = center_x + start_distance
         f2_end_x = center_x + end_distance
 
-        # Build finger 1 action sequence
-        finger1.create_pointer_move(
-            duration=0, x=f1_start_x, y=center_y, origin="viewport"
-        )
-        finger1.create_pointer_down(button=0)
-        finger1.create_pointer_move(
-            duration=duration_ms, x=f1_end_x, y=center_y, origin="viewport"
-        )
-        finger1.create_pointer_up(button=0)
-
-        # Build finger 2 action sequence
-        finger2.create_pointer_move(
-            duration=0, x=f2_start_x, y=center_y, origin="viewport"
-        )
-        finger2.create_pointer_down(button=0)
-        finger2.create_pointer_move(
-            duration=duration_ms, x=f2_end_x, y=center_y, origin="viewport"
-        )
-        finger2.create_pointer_up(button=0)
-
-        # Execute multi-touch action
+        # Create ActionBuilder and add pointer inputs for multi-touch
         actions = ActionBuilder(driver)
-        actions.add_action(finger1)
-        actions.add_action(finger2)
+        finger1 = actions.add_pointer_input(interaction.POINTER_TOUCH, "finger1")
+        finger2 = actions.add_pointer_input(interaction.POINTER_TOUCH, "finger2")
+
+        # Build finger 1 action sequence
+        finger1.pointer_action.move_to_location(f1_start_x, center_y)
+        finger1.pointer_action.pointer_down()
+        finger1.pointer_action.pause(duration_s)
+        finger1.pointer_action.move_to_location(f1_end_x, center_y)
+        finger1.pointer_action.pointer_up()
+
+        # Build finger 2 action sequence (synchronized with finger1)
+        finger2.pointer_action.move_to_location(f2_start_x, center_y)
+        finger2.pointer_action.pointer_down()
+        finger2.pointer_action.pause(duration_s)
+        finger2.pointer_action.move_to_location(f2_end_x, center_y)
+        finger2.pointer_action.pointer_up()
 
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, actions.perform)
@@ -417,6 +407,7 @@ class MobileNavigationHandler:
         center_x, center_y = self.normalize_coordinates(action.center_x, action.center_y)
         angle_rad = math.radians(action.angle)
         duration_ms = action.duration_ms
+        duration_s = duration_ms / 1000
         radius = ROTATE_RADIUS_PX
 
         self._log(
@@ -425,10 +416,6 @@ class MobileNavigationHandler:
         )
 
         driver = self.appium_client.get_driver()
-
-        # Create two touch inputs for rotation
-        finger1 = PointerInput(interaction.POINTER_TOUCH, "finger1")
-        finger2 = PointerInput(interaction.POINTER_TOUCH, "finger2")
 
         # Starting positions: opposite sides of center
         f1_start_angle = 0
@@ -446,30 +433,24 @@ class MobileNavigationHandler:
         f2_end_x = int(center_x + radius * math.cos(f2_start_angle + angle_rad))
         f2_end_y = int(center_y + radius * math.sin(f2_start_angle + angle_rad))
 
-        # Build finger 1 action sequence
-        finger1.create_pointer_move(
-            duration=0, x=f1_start_x, y=f1_start_y, origin="viewport"
-        )
-        finger1.create_pointer_down(button=0)
-        finger1.create_pointer_move(
-            duration=duration_ms, x=f1_end_x, y=f1_end_y, origin="viewport"
-        )
-        finger1.create_pointer_up(button=0)
-
-        # Build finger 2 action sequence
-        finger2.create_pointer_move(
-            duration=0, x=f2_start_x, y=f2_start_y, origin="viewport"
-        )
-        finger2.create_pointer_down(button=0)
-        finger2.create_pointer_move(
-            duration=duration_ms, x=f2_end_x, y=f2_end_y, origin="viewport"
-        )
-        finger2.create_pointer_up(button=0)
-
-        # Execute multi-touch action
+        # Create ActionBuilder and add pointer inputs for multi-touch
         actions = ActionBuilder(driver)
-        actions.add_action(finger1)
-        actions.add_action(finger2)
+        finger1 = actions.add_pointer_input(interaction.POINTER_TOUCH, "finger1")
+        finger2 = actions.add_pointer_input(interaction.POINTER_TOUCH, "finger2")
+
+        # Build finger 1 action sequence
+        finger1.pointer_action.move_to_location(f1_start_x, f1_start_y)
+        finger1.pointer_action.pointer_down()
+        finger1.pointer_action.pause(duration_s)
+        finger1.pointer_action.move_to_location(f1_end_x, f1_end_y)
+        finger1.pointer_action.pointer_up()
+
+        # Build finger 2 action sequence (synchronized with finger1)
+        finger2.pointer_action.move_to_location(f2_start_x, f2_start_y)
+        finger2.pointer_action.pointer_down()
+        finger2.pointer_action.pause(duration_s)
+        finger2.pointer_action.move_to_location(f2_end_x, f2_end_y)
+        finger2.pointer_action.pointer_up()
 
         loop = asyncio.get_running_loop()
         await loop.run_in_executor(None, actions.perform)
@@ -554,7 +535,7 @@ class MobileNavigationHandler:
         Returns:
             ActionExecutionResult
         """
-        duration_s = (action.miliseconds or 1000) / 1000
+        duration_s = (action.milliseconds or 1000) / 1000
         self._log("debug", f"Waiting for {duration_s}s")
         await asyncio.sleep(duration_s)
         return ActionExecutionResult(success=True, error=None)

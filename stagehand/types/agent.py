@@ -71,7 +71,7 @@ class MoveAction(BaseModel):
 
 class WaitAction(BaseModel):
     type: Literal["wait"]
-    miliseconds: Optional[int] = 0
+    milliseconds: Optional[int] = 0
     # No specific args, implies a default wait time
 
 
