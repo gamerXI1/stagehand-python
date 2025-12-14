@@ -3,7 +3,7 @@
 from enum import Enum
 from typing import Any, Literal, Optional, Protocol, runtime_checkable
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # =============================================================================
@@ -266,8 +266,7 @@ class AppiumCapabilities(BaseModel):
     # App path (for installing apps)
     app: Optional[str] = None
 
-    class Config:
-        populate_by_name = True
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class IOSCapabilities(AppiumCapabilities):
