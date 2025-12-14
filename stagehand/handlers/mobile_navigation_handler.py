@@ -353,7 +353,7 @@ class MobileNavigationHandler:
             ActionExecutionResult
         """
         center_x, center_y = self.normalize_coordinates(action.center_x, action.center_y)
-        scale = action.scale
+        scale = max(0.1, action.scale)  # Clamp scale to avoid division issues
         duration_ms = action.duration_ms
         duration_s = duration_ms / 1000
 
@@ -389,18 +389,28 @@ class MobileNavigationHandler:
         finger1 = actions.add_pointer_input(interaction.POINTER_TOUCH, "finger1")
         finger2 = actions.add_pointer_input(interaction.POINTER_TOUCH, "finger2")
 
-        # Build finger 1 action sequence
+        # Calculate intermediate steps for smooth gesture (~60fps or minimum 10 steps)
+        steps = max(int(duration_s * 60), 10)
+        step_duration = duration_s / steps
+
+        # Build finger 1 action sequence with smooth movement
         finger1.pointer_action.move_to_location(f1_start_x, center_y)
         finger1.pointer_action.pointer_down()
-        finger1.pointer_action.pause(duration_s)
-        finger1.pointer_action.move_to_location(f1_end_x, center_y)
+        for i in range(1, steps + 1):
+            progress = i / steps
+            current_x = int(f1_start_x + (f1_end_x - f1_start_x) * progress)
+            finger1.pointer_action.move_to_location(current_x, center_y)
+            finger1.pointer_action.pause(step_duration)
         finger1.pointer_action.pointer_up()
 
-        # Build finger 2 action sequence (synchronized with finger1)
+        # Build finger 2 action sequence with smooth movement (synchronized)
         finger2.pointer_action.move_to_location(f2_start_x, center_y)
         finger2.pointer_action.pointer_down()
-        finger2.pointer_action.pause(duration_s)
-        finger2.pointer_action.move_to_location(f2_end_x, center_y)
+        for i in range(1, steps + 1):
+            progress = i / steps
+            current_x = int(f2_start_x + (f2_end_x - f2_start_x) * progress)
+            finger2.pointer_action.move_to_location(current_x, center_y)
+            finger2.pointer_action.pause(step_duration)
         finger2.pointer_action.pointer_up()
 
         loop = asyncio.get_running_loop()
@@ -429,9 +439,18 @@ class MobileNavigationHandler:
 
         driver = self.appium_client.get_driver()
 
-        # Starting positions: opposite sides of center
+        # Starting angles: fingers opposite each other
         f1_start_angle = 0
         f2_start_angle = math.pi  # 180 degrees opposite
+
+        # Create ActionBuilder and add pointer inputs for multi-touch
+        actions = ActionBuilder(driver)
+        finger1 = actions.add_pointer_input(interaction.POINTER_TOUCH, "finger1")
+        finger2 = actions.add_pointer_input(interaction.POINTER_TOUCH, "finger2")
+
+        # Calculate intermediate steps for smooth gesture (~60fps or minimum 10 steps)
+        steps = max(int(duration_s * 60), 10)
+        step_duration = duration_s / steps
 
         # Calculate start positions
         f1_start_x = int(center_x + radius * math.cos(f1_start_angle))
@@ -439,29 +458,28 @@ class MobileNavigationHandler:
         f2_start_x = int(center_x + radius * math.cos(f2_start_angle))
         f2_start_y = int(center_y + radius * math.sin(f2_start_angle))
 
-        # Calculate end positions
-        f1_end_x = int(center_x + radius * math.cos(f1_start_angle + angle_rad))
-        f1_end_y = int(center_y + radius * math.sin(f1_start_angle + angle_rad))
-        f2_end_x = int(center_x + radius * math.cos(f2_start_angle + angle_rad))
-        f2_end_y = int(center_y + radius * math.sin(f2_start_angle + angle_rad))
-
-        # Create ActionBuilder and add pointer inputs for multi-touch
-        actions = ActionBuilder(driver)
-        finger1 = actions.add_pointer_input(interaction.POINTER_TOUCH, "finger1")
-        finger2 = actions.add_pointer_input(interaction.POINTER_TOUCH, "finger2")
-
-        # Build finger 1 action sequence
+        # Build finger 1 action sequence with smooth arc movement
         finger1.pointer_action.move_to_location(f1_start_x, f1_start_y)
         finger1.pointer_action.pointer_down()
-        finger1.pointer_action.pause(duration_s)
-        finger1.pointer_action.move_to_location(f1_end_x, f1_end_y)
+        for i in range(1, steps + 1):
+            progress = i / steps
+            current_angle = f1_start_angle + angle_rad * progress
+            current_x = int(center_x + radius * math.cos(current_angle))
+            current_y = int(center_y + radius * math.sin(current_angle))
+            finger1.pointer_action.move_to_location(current_x, current_y)
+            finger1.pointer_action.pause(step_duration)
         finger1.pointer_action.pointer_up()
 
-        # Build finger 2 action sequence (synchronized with finger1)
+        # Build finger 2 action sequence with smooth arc movement (synchronized)
         finger2.pointer_action.move_to_location(f2_start_x, f2_start_y)
         finger2.pointer_action.pointer_down()
-        finger2.pointer_action.pause(duration_s)
-        finger2.pointer_action.move_to_location(f2_end_x, f2_end_y)
+        for i in range(1, steps + 1):
+            progress = i / steps
+            current_angle = f2_start_angle + angle_rad * progress
+            current_x = int(center_x + radius * math.cos(current_angle))
+            current_y = int(center_y + radius * math.sin(current_angle))
+            finger2.pointer_action.move_to_location(current_x, current_y)
+            finger2.pointer_action.pause(step_duration)
         finger2.pointer_action.pointer_up()
 
         loop = asyncio.get_running_loop()
